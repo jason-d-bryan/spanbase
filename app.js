@@ -232,13 +232,17 @@ function showRadialMenu(latlng, bridge) {
     document.getElementById('map').appendChild(menu);
     radialMenu = { menu, title };
     
-    // Click outside to close
+    // Click outside to close (but not on bridges)
     setTimeout(() => {
         const closeListener = function(e) {
-            if (!menu.contains(e.target) && !e.target.closest('.info-panel')) {
-                closeAllMenus();
-                document.removeEventListener('click', closeListener);
+            // Don't close if clicking on menu, info panel, or another bridge
+            if (menu.contains(e.target) || 
+                e.target.closest('.info-panel') ||
+                e.target.closest('.leaflet-interactive')) {
+                return;
             }
+            closeAllMenus();
+            document.removeEventListener('click', closeListener);
         };
         document.addEventListener('click', closeListener);
     }, 100);
