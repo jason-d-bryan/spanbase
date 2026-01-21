@@ -124,7 +124,7 @@ function addBridges() {
         marker.bridgeData = bridge;
         
         marker.on('mouseover', function(e) {
-            if (currentZoom > 13) {
+            if (currentZoom > 11) {
                 showNameTooltip(e, bridge);
             }
         });
