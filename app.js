@@ -95,18 +95,38 @@ function addBridges() {
         const color = getBridgeColor(bridge);
         const size = getPointSize();
         
+        // Calculate z-index based on worst rating - worse bridges appear on top
+        const ratings = [
+            bridge.deck_rating,
+            bridge.superstructure_rating,
+            bridge.substructure_rating,
+            bridge.bearings_rating,
+            bridge.joints_rating
+        ].filter(r => r != null && r !== undefined);
+        
+        let zIndex = 100; // Default for N/A
+        if (ratings.length > 0) {
+            const worst = Math.min(...ratings);
+            // Rating 0 (FAILED) = z-index 1000 (always on top)
+            // Rating 1 = 900, Rating 9 = 100
+            zIndex = worst === 0 ? 1000 : (1000 - (worst * 100));
+        }
+        
         const marker = L.circleMarker([bridge.latitude, bridge.longitude], {
             radius: size,
             fillColor: color,
             color: '#fff',
             weight: 2,
-            fillOpacity: 0.85
+            fillOpacity: 0.85,
+            zIndexOffset: zIndex
         });
         
         marker.bridgeData = bridge;
         
         marker.on('mouseover', function(e) {
-            showNameTooltip(e, bridge);
+            if (currentZoom > 10) {
+                showNameTooltip(e, bridge);
+            }
         });
         
         marker.on('mouseout', function() {
