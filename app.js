@@ -69,7 +69,6 @@ async function init() {
         addBridges();
         setupSearch();
         updateStats();
-        createDebugPanel();
         createEvaluationPanel();
         
         map.on('zoomend', function() {
@@ -89,14 +88,9 @@ async function init() {
 }
 
 function addBridges() {
-    bridgesData.forEach(bridge => {
-        if (!bridge.latitude || !bridge.longitude) return;
-        
-        const color = getBridgeColor(bridge);
-        const size = getPointSize();
-        
-        // Calculate z-index based on worst rating - worse bridges appear on top
-        const ratings = [
+    // Sort bridges by worst rating - best bridges first, worst last (so worst drawn on top)
+    const sortedBridges = [...bridgesData].sort((a, b) => {
+        const getRatings = (bridge) => [
             bridge.deck_rating,
             bridge.superstructure_rating,
             bridge.substructure_rating,
@@ -104,21 +98,31 @@ function addBridges() {
             bridge.joints_rating
         ].filter(r => r != null && r !== undefined);
         
-        let zIndex = 100; // Default for N/A
-        if (ratings.length > 0) {
-            const worst = Math.min(...ratings);
-            // Rating 0 (FAILED) = z-index 1000 (always on top)
-            // Rating 1 = 900, Rating 9 = 100
-            zIndex = worst === 0 ? 1000 : (1000 - (worst * 100));
-        }
+        const aRatings = getRatings(a);
+        const bRatings = getRatings(b);
+        
+        if (aRatings.length === 0 && bRatings.length === 0) return 0;
+        if (aRatings.length === 0) return -1; // N/A bridges first
+        if (bRatings.length === 0) return 1;
+        
+        const aWorst = Math.min(...aRatings);
+        const bWorst = Math.min(...bRatings);
+        
+        return bWorst - aWorst; // Higher rating first (best to worst)
+    });
+    
+    sortedBridges.forEach(bridge => {
+        if (!bridge.latitude || !bridge.longitude) return;
+        
+        const color = getBridgeColor(bridge);
+        const size = getPointSize();
         
         const marker = L.circleMarker([bridge.latitude, bridge.longitude], {
             radius: size,
             fillColor: color,
             color: '#fff',
             weight: 2,
-            fillOpacity: 0.85,
-            zIndexOffset: zIndex
+            fillOpacity: 0.85
         });
         
         marker.bridgeData = bridge;
