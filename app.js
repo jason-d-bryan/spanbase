@@ -664,6 +664,11 @@ function updateBridgeSizes() {
             }
         }
         
+        // Hide outline when fill is hidden (evaluation mode)
+        if (opacity === 0) {
+            outlineOpacity = 0;
+        }
+        
         marker.setRadius(size);
         marker.setStyle({ 
             fillOpacity: opacity,
@@ -799,7 +804,7 @@ function applySearch() {
             // No match - hide both fill and outline
             marker.setStyle({ 
                 fillOpacity: 0,
-                opacity: 0 // Outline hidden too
+                opacity: 0 // Outline hidden
             });
         }
     });
