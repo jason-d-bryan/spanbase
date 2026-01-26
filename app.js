@@ -9,6 +9,23 @@ let radialMenu = null;
 let nameTooltip = null;
 let currentSearchQuery = ''; // Track search state
 
+// District toggle state - all active by default
+let activeDistricts = {
+    'District 1': true,
+    'District 2': true,
+    'District 3': true,
+    'District 4': true,
+    'District 5': true,
+    'District 6': true,
+    'District 7': true,
+    'District 8': true,
+    'District 9': true,
+    'District 10': true
+};
+
+// Auto-hide state
+let autoHideEnabled = false;
+
 // District colors
 const districtColors = {
     'District 1': '#e63946',
@@ -70,6 +87,8 @@ async function init() {
         setupSearch();
         updateStats();
         createEvaluationPanel();
+        setupDistrictToggles();
+        setupAutoHide();
         
         map.on('zoomend', function() {
             currentZoom = map.getZoom();
@@ -205,12 +224,13 @@ function showRadialMenu(latlng, bridge) {
         </div>
     `;
     
-    // 4 nodes at NE, SE, SW, NW (45°, 135°, 225°, 315°)
+    // 5 nodes - adding Postings at the bottom
     const nodes = [
         { angle: 315, label: 'Condition', action: () => showCondition(bridge) },      // NW (top-left)
         { angle: 45, label: 'Geometry', action: () => showGeometry(bridge) },         // NE (top-right)
         { angle: 135, label: 'Attributes', action: () => showAttributes(bridge) },    // SE (bottom-right)
-        { angle: 225, label: 'Narratives', action: () => showNarratives(bridge) }     // SW (bottom-left)
+        { angle: 225, label: 'Narratives', action: () => showNarratives(bridge) },     // SW (bottom-left)
+        { angle: 180, label: 'Postings', action: () => showPostings(bridge) }         // S (bottom center)
     ];
     
     nodes.forEach(node => {
@@ -421,6 +441,40 @@ function showCondition(bridge) {
     html += '<div style="margin-top:15px;font-size:12px;color:#999;">Rating scale: 1 (Poor) to 9 (Excellent)</div>';
     
     createInfoPanel('Condition Ratings', html, bridge);
+}
+
+function showPostings(bridge) {
+    // Load rating/posting information
+    const loadRatings = [
+        { label: 'Inventory Rating (B.LR.05)', value: bridge.inventory_rating || 'N/A' },
+        { label: 'IR (tons)', value: bridge.ir_tons || 'N/A' },
+        { label: 'IR (ratio)', value: bridge.ir_ratio || 'N/A' },
+        { label: 'Final IR (Tons)', value: bridge.final_ir_tons || 'N/A' }
+    ];
+    
+    let html = '<div class="info-grid">';
+    loadRatings.forEach(r => {
+        html += `
+            <div class="info-item full-width">
+                <span class="info-label">${r.label}</span>
+                <span class="info-value">${r.value}</span>
+            </div>
+        `;
+    });
+    html += '</div>';
+    
+    // Placeholder for posting restrictions
+    html += `
+        <div style="margin-top: 20px; padding: 15px; background: rgba(255,184,28,0.1); border: 1px solid var(--wvdoh-yellow); border-radius: 6px;">
+            <h4 style="color: var(--wvdoh-yellow); margin-bottom: 10px;">Bridge Load Postings</h4>
+            <p style="font-size: 10pt; color: rgba(255,255,255,0.8);">
+                Posting restriction data will be integrated from the "Posting Changes for 5 Years" spreadsheet.
+                This section will display current posting status and historical changes.
+            </p>
+        </div>
+    `;
+    
+    createInfoPanel('Load Rating & Postings', html, bridge);
 }
 
 function createInfoPanel(title, content, bridge) {
@@ -799,11 +853,19 @@ function applySearch() {
         const bars = (bridge.bars_number || '').toUpperCase();
         
         if (bars.startsWith(currentSearchQuery)) {
-            // Match - show bridge normally
-            marker.setStyle({ 
-                fillOpacity: evaluationActive ? getEvaluationOpacity(bridge) : 0.85,
-                opacity: 1 // Outline visible
-            });
+            // Match - check if district is active
+            const districtActive = activeDistricts[bridge.district];
+            if (districtActive) {
+                marker.setStyle({ 
+                    fillOpacity: evaluationActive ? getEvaluationOpacity(bridge) : 0.85,
+                    opacity: 1 // Outline visible
+                });
+            } else {
+                marker.setStyle({ 
+                    fillOpacity: 0,
+                    opacity: 0
+                });
+            }
         } else {
             // No match - hide both fill and outline
             marker.setStyle({ 
@@ -836,6 +898,104 @@ function updateDebugPanel() {
         <div class="debug-item"><span>Mode:</span><span>${currentMode}</span></div>
         <div class="debug-item"><span>Bridges:</span><span>${Object.keys(bridgeLayers).length}</span></div>
     `;
+}
+
+// District toggle functionality
+function setupDistrictToggles() {
+    const legendItems = document.querySelectorAll('.legend-item');
+    legendItems.forEach((item, index) => {
+        const districtName = `District ${index + 1}`;
+        item.addEventListener('click', () => {
+            // Toggle district state
+            activeDistricts[districtName] = !activeDistricts[districtName];
+            
+            // Update visual state
+            if (activeDistricts[districtName]) {
+                item.classList.remove('inactive');
+            } else {
+                item.classList.add('inactive');
+            }
+            
+            // Update bridge visibility
+            updateBridgeVisibility();
+        });
+    });
+}
+
+function updateBridgeVisibility() {
+    Object.entries(bridgeLayers).forEach(([bars, marker]) => {
+        const bridge = bridgesData.find(b => b.bars === bars);
+        if (!bridge) return;
+        
+        const districtActive = activeDistricts[bridge.district];
+        const searchMatch = !currentSearchQuery || bars.startsWith(currentSearchQuery);
+        
+        if (districtActive && searchMatch) {
+            marker.setStyle({ 
+                fillOpacity: evaluationActive ? getEvaluationOpacity(bridge) : 0.85,
+                opacity: 1
+            });
+        } else {
+            marker.setStyle({ 
+                fillOpacity: 0,
+                opacity: 0
+            });
+        }
+    });
+}
+
+// Auto-hide functionality
+function setupAutoHide() {
+    const panel = document.getElementById('evaluationPanel');
+    let dragTimeout;
+    
+    // Add auto-hide toggle to panel if not exists
+    const panelBody = panel.querySelector('.panel-body');
+    if (panelBody && !document.getElementById('autoHideToggle')) {
+        const toggleHTML = `
+            <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--box-border);">
+                <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px;">
+                    <label style="font-size: 10pt; color: rgba(255,255,255,0.8);">Auto-hide on drag</label>
+                    <div id="autoHideToggle" style="width: 44px; height: 24px; background: rgba(255,255,255,0.2); border-radius: 12px; cursor: pointer; position: relative; transition: background 0.3s;">
+                        <div id="autoHideKnob" style="width: 20px; height: 20px; background: white; border-radius: 50%; position: absolute; top: 2px; left: 2px; transition: left 0.3s;"></div>
+                    </div>
+                </div>
+            </div>
+        `;
+        panelBody.insertAdjacentHTML('beforeend', toggleHTML);
+        
+        // Toggle handler
+        document.getElementById('autoHideToggle').addEventListener('click', function() {
+            autoHideEnabled = !autoHideEnabled;
+            const knob = document.getElementById('autoHideKnob');
+            const toggle = document.getElementById('autoHideToggle');
+            
+            if (autoHideEnabled) {
+                knob.style.left = '22px';
+                toggle.style.background = 'var(--wvdoh-yellow)';
+            } else {
+                knob.style.left = '2px';
+                toggle.style.background = 'rgba(255,255,255,0.2)';
+            }
+        });
+    }
+    
+    // Map drag handlers
+    map.on('dragstart', () => {
+        if (autoHideEnabled && panel.classList.contains('open')) {
+            panel.style.transition = 'left 0.2s ease';
+            panel.style.left = '-320px';
+        }
+    });
+    
+    map.on('dragend', () => {
+        if (autoHideEnabled) {
+            clearTimeout(dragTimeout);
+            dragTimeout = setTimeout(() => {
+                panel.style.left = '0';
+            }, 1000);
+        }
+    });
 }
 
 window.addEventListener('DOMContentLoaded', init);
