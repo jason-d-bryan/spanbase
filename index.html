@@ -45,7 +45,7 @@
         }
         
         .header {
-            position: absolute; top: 20px; left: 20px; z-index: 1000;
+            position: absolute; top: 20px; right: 20px; z-index: 1000;
             background: var(--box-bg); padding: 20px 30px;
             border-radius: 8px; border: 1px solid var(--box-border);
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
@@ -110,7 +110,7 @@
         
         /* Evaluation Panel with Folder Tab */
         .evaluation-panel {
-            position: fixed; left: -320px; top: 50%; transform: translateY(-50%);
+            position: fixed; left: -320px; top: 0; bottom: 0;
             z-index: 10000; background: var(--box-bg);
             border: 1px solid var(--box-border); border-left: none;
             border-radius: 0 12px 12px 0; width: 320px;
@@ -166,7 +166,7 @@
         }
         
         .panel-body {
-            padding: 20px; overflow-y: auto; max-height: 60vh;
+            padding: 20px; overflow-y: auto; flex: 1;
         }
         .panel-instructions {
             font-size: 10pt; color: rgba(255, 255, 255, 0.8); 
@@ -234,6 +234,15 @@
         }
         .legend-item {
             display: flex; align-items: center; margin-bottom: 6px; font-size: 10pt;
+            padding: 6px 8px; border-radius: 4px; cursor: pointer;
+            transition: all 0.2s; border: 1px solid transparent;
+        }
+        .legend-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--wvdoh-yellow);
+        }
+        .legend-item.inactive {
+            opacity: 0.4;
         }
         .legend-color {
             width: 14px; height: 14px; border-radius: 50%;
@@ -473,7 +482,7 @@
         <div class="header-overlay"></div>
         <h1>SpanBase</h1>
         <div class="subtitle">Operations Division – 0066</div>
-        <div class="email"><a href="mailto:jason.d.bryan@wv.gov">jason.d.bryan@wv.gov</a></div>
+        <div class="email"><a href="/cdn-cgi/l/email-protection#0d676c7e62632369236f7f746c634d7a7b236a627b"><span class="__cf_email__" data-cfemail="fb919a889495d59fd59989829a95bb8c8dd59c948d">[email&#160;protected]</span></a></div>
         <div class="search">
             <input type="text" id="searchInput" placeholder="BARS Search...">
         </div>
@@ -574,8 +583,4 @@
         </div>
     </div>
     
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
-    <script src="app.js"></script>
-</body>
-</html>
+    <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-stati
