@@ -1,6 +1,7 @@
 // SpanBase - Complete Build with All Features
 let map;
 let bridgesData = [];
+let sufficiencyData = {}; // BARS number -> calculated sufficiency rating
 let bridgeLayers = {};
 let currentMode = 'default';
 let currentZoom = 8;
@@ -8,6 +9,13 @@ let hoveredBridge = null;
 let radialMenu = null;
 let nameTooltip = null;
 let currentSearchQuery = ''; // Track search state
+
+// Inspection system
+let inspectionsData = {}; // BARS number -> array of inspections
+let inspectionFiltersActive = false;
+let selectedInspectionTypes = [];
+let selectedMonths = [];
+let showOverduePlus = false;
 
 // District toggle state - all active by default
 let activeDistricts = {
@@ -28,16 +36,16 @@ let autoHideEnabled = false;
 
 // District colors
 const districtColors = {
-    'District 1': '#e63946',
-    'District 2': '#f77f00',
-    'District 3': '#fcbf49',
-    'District 4': '#06d6a0',
-    'District 5': '#118ab2',
-    'District 6': '#073b4c',
-    'District 7': '#8338ec',
-    'District 8': '#ff006e',
-    'District 9': '#3a86ff',
-    'District 10': '#fb5607'
+    'District 1': '#e63946',  // Red (keep same)
+    'District 2': '#10B981',  // Green (was orange, too similar to 1)
+    'District 3': '#fcbf49',  // Yellow
+    'District 4': '#06d6a0',  // Turquoise
+    'District 5': '#118ab2',  // Blue
+    'District 6': '#073b4c',  // Dark teal
+    'District 7': '#8338ec',  // Purple
+    'District 8': '#ff006e',  // Pink
+    'District 9': '#3a86ff',  // Light blue
+    'District 10': '#F59E0B'  // Amber (was orange-red, too similar to 1)
 };
 
 // Condition colors - 0 is FAILED/CLOSED (bright red, excluded from filtering)
@@ -61,8 +69,11 @@ let sliderValues = {
     superstructure: 0,
     substructure: 0,
     bearings: 0,
-    joints: 0
+    joints: 0,
+    sufficiency: 100  // Default to 100 (show all)
 };
+
+let sufficiencyMode = 'lte';  // 'lte' = ≤ mode, 'gte' = ≥ mode
 
 // Initialize
 async function init() {
@@ -76,6 +87,18 @@ async function init() {
         bridgesData = JSON.parse(decompressed);
         console.log(`✓ Loaded ${bridgesData.length} bridges`);
         
+        // Load inspection data
+        const inspResponse = await fetch('inspections_data.json.gz');
+        const inspCompressed = await inspResponse.arrayBuffer();
+        const inspDecompressed = pako.inflate(new Uint8Array(inspCompressed), { to: 'string' });
+        inspectionsData = JSON.parse(inspDecompressed);
+        console.log(`✓ Loaded inspection data for ${Object.keys(inspectionsData).length} bridges`);
+        
+        // Load calculated sufficiency data
+        const suffResponse = await fetch('sufficiency_data.json');
+        sufficiencyData = await suffResponse.json();
+        console.log(`✓ Loaded sufficiency data for ${Object.keys(sufficiencyData).length} bridges`);
+        
         map = L.map('map').setView([38.5976, -80.4549], 8);
         
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -88,10 +111,12 @@ async function init() {
         updateStats();
         createEvaluationPanel();
         setupDistrictToggles();
-        setupAutoHide();
         
         map.on('zoomend', function() {
             currentZoom = map.getZoom();
+            const zoomDisplay = document.getElementById('zoomDisplay');
+            if (zoomDisplay) zoomDisplay.textContent = currentZoom;
+            syncToggleAllButton(); // Keep button text synced
             updateBridgeSizes();
             updateDebugPanel();
             closeAllMenus();
@@ -157,6 +182,12 @@ function addBridges() {
         });
         
         marker.on('click', function(e) {
+            // Don't allow clicking hidden bridges
+            const options = this.options;
+            if (options.opacity === 0 || options.fillOpacity === 0) {
+                return;
+            }
+            
             L.DomEvent.stopPropagation(e);
             removeNameTooltip();
             showRadialMenu(e.latlng, bridge);
@@ -168,6 +199,9 @@ function addBridges() {
 }
 
 function showNameTooltip(e, bridge) {
+    // Only show tooltips at zoom 10 or higher
+    if (currentZoom < 10) return;
+    
     removeNameTooltip();
     
     const point = map.latLngToContainerPoint(e.latlng);
@@ -195,7 +229,7 @@ function showRadialMenu(latlng, bridge) {
     // Create title above menu - moved up 225px total
     const title = L.DomUtil.create('div', 'menu-title');
     title.style.left = point.x + 'px';
-    title.style.top = (point.y - 225) + 'px';
+    title.style.top = (point.y - 255) + 'px';
     
     // Convert bridge name to title case
     const bridgeName = bridge.bridge_name || 'Unknown';
@@ -224,18 +258,18 @@ function showRadialMenu(latlng, bridge) {
         </div>
     `;
     
-    // 5 nodes - adding Postings at the bottom
+    // 5 nodes evenly spaced around the circle (72° apart)
     const nodes = [
-        { angle: 315, label: 'Condition', action: () => showCondition(bridge) },      // NW (top-left)
-        { angle: 45, label: 'Geometry', action: () => showGeometry(bridge) },         // NE (top-right)
-        { angle: 135, label: 'Attributes', action: () => showAttributes(bridge) },    // SE (bottom-right)
-        { angle: 225, label: 'Narratives', action: () => showNarratives(bridge) },     // SW (bottom-left)
-        { angle: 180, label: 'Postings', action: () => showPostings(bridge) }         // S (bottom center)
+        { angle: 270, label: 'Narrative', action: () => showNarratives(bridge) },        // Top (12 o'clock)
+        { angle: 342, label: 'Condition', action: () => showCondition(bridge) },         // Top-right
+        { angle: 54, label: 'Geometry', action: () => showGeometry(bridge) },            // Bottom-right
+        { angle: 126, label: 'Attributes', action: () => showAttributes(bridge) },       // Bottom
+        { angle: 198, label: 'Inspection', action: () => showInspectionsPopup(bridge) } // Bottom-left
     ];
     
     nodes.forEach(node => {
         const rad = node.angle * Math.PI / 180;
-        const distance = 100; // Increased for 110px circles
+        const distance = 110; // Increased distance for better spacing
         
         const option = L.DomUtil.create('div', 'radial-option', menu);
         option.style.left = (distance * Math.cos(rad)) + 'px';
@@ -418,6 +452,14 @@ function showNarratives(bridge) {
 }
 
 function showCondition(bridge) {
+    // Get calculated sufficiency from loaded data
+    let calcSufficiency = 'N/A';
+    const bars = bridge.bars_number;
+    
+    if (sufficiencyData[bars] !== undefined) {
+        calcSufficiency = sufficiencyData[bars].toFixed(1);
+    }
+    
     const ratings = [
         { label: 'Deck', value: bridge.deck_rating },
         { label: 'Superstructure', value: bridge.superstructure_rating },
@@ -438,6 +480,20 @@ function showCondition(bridge) {
         `;
     });
     html += '</div>';
+    
+    // Add calculated sufficiency box
+    html += `
+        <div style="margin-top: 20px; padding: 15px; background: rgba(255,184,28,0.1); border: 2px solid var(--wvdoh-yellow); border-radius: 6px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 11pt; font-weight: 600; color: var(--wvdoh-yellow);">Calculated Sufficiency</span>
+                <span style="font-size: 14pt; font-weight: 700; color: var(--wvdoh-yellow);">${calcSufficiency}</span>
+            </div>
+            <div style="margin-top: 8px; font-size: 9pt; color: rgba(255,255,255,0.6);">
+                Source: Calculated from WVDOT Bridge Sufficiency Rating Model
+            </div>
+        </div>
+    `;
+    
     html += '<div style="margin-top:15px;font-size:12px;color:#999;">Rating scale: 1 (Poor) to 9 (Excellent)</div>';
     
     createInfoPanel('Condition Ratings', html, bridge);
@@ -554,6 +610,8 @@ function closeAllMenus() {
         if (radialMenu.title) radialMenu.title.remove();
         radialMenu = null;
     }
+    // Close all info panels (popups)
+    document.querySelectorAll('.info-panel').forEach(panel => panel.remove());
 }
 
 function getBridgeColor(bridge) {
@@ -561,6 +619,16 @@ function getBridgeColor(bridge) {
         return getEvaluationColor(bridge);
     }
     return districtColors[bridge.district] || '#00d9ff';
+}
+
+// Helper function to get sufficiency rating on 0-9 scale
+function getSufficiencyRating(bridge) {
+    const bars = bridge.bars_number;
+    if (sufficiencyData[bars] !== undefined) {
+        // Convert 0-100% scale to 0-9 scale
+        return sufficiencyData[bars] / 100 * 9;
+    }
+    return null;
 }
 
 function getEvaluationColor(bridge) {
@@ -571,9 +639,28 @@ function getEvaluationColor(bridge) {
         return getWorstConditionColor(bridge);
     }
     
-    // Calculate weighted average from active sliders
-    let totalWeight = 0;
-    let weightedSum = 0;
+    // Get real sufficiency rating (0-9 scale)
+    const calcSufficiency = getSufficiencyRating(bridge);
+    
+    // SUFFICIENCY FILTER: If sufficiency slider is active, filter by it
+    const sufficiencySlider = sliderValues.sufficiency;
+    if (sufficiencySlider < 100 && calcSufficiency != null) {
+        // Convert slider value (0-100) to rating threshold (0-9)
+        const sufficiencyThreshold = sufficiencySlider / 100 * 9;
+        
+        // Apply filter based on mode
+        if (sufficiencyMode === 'lte') {
+            // ≤ Mode: Show bridges with sufficiency ≤ threshold
+            if (calcSufficiency > sufficiencyThreshold) {
+                return '#6b7280'; // Hide
+            }
+        } else {
+            // ≥ Mode: Show bridges with sufficiency ≥ threshold
+            if (calcSufficiency < sufficiencyThreshold) {
+                return '#6b7280'; // Hide
+            }
+        }
+    }
     
     const ratingMap = {
         deck: bridge.deck_rating,
@@ -583,19 +670,33 @@ function getEvaluationColor(bridge) {
         joints: bridge.joints_rating
     };
     
-    activeSliders.forEach(([key, weight]) => {
+    // SEVERITY SCORING: Only for non-sufficiency sliders
+    const severitySliders = activeSliders.filter(([k]) => k !== 'sufficiency');
+    
+    // If only sufficiency slider active, use worst condition color
+    if (severitySliders.length === 0) {
+        return getWorstConditionColor(bridge);
+    }
+    
+    let totalSeverity = 0;
+    let numActiveWithRatings = 0;
+    
+    severitySliders.forEach(([key, sliderValue]) => {
         const rating = ratingMap[key];
         if (rating != null && rating !== undefined) {
-            weightedSum += rating * weight;
-            totalWeight += weight;
+            const badness = (9 - rating);
+            const severityContribution = badness * (sliderValue / 100);
+            totalSeverity += severityContribution;
+            numActiveWithRatings++;
         }
     });
     
-    // If no valid ratings, return gray
-    if (totalWeight === 0) return '#6b7280';
+    if (numActiveWithRatings === 0) return '#6b7280';
     
-    const weightedAvg = Math.round(weightedSum / totalWeight);
-    return conditionColors[weightedAvg] || '#6b7280';
+    const avgSeverity = totalSeverity / numActiveWithRatings;
+    const effectiveRating = Math.round(9 - avgSeverity);
+    
+    return conditionColors[Math.max(1, Math.min(9, effectiveRating))] || '#6b7280';
 }
 
 function getWorstConditionColor(bridge) {
@@ -621,8 +722,8 @@ function getEvaluationSize(bridge, baseSize) {
     const activeSliders = Object.entries(sliderValues).filter(([k, v]) => v > 0);
     if (activeSliders.length === 0) return baseSize;
     
-    let totalWeight = 0;
-    let weightedSum = 0;
+    // Get real sufficiency rating
+    const calcSufficiency = getSufficiencyRating(bridge);
     
     const ratingMap = {
         deck: bridge.deck_rating,
@@ -632,53 +733,72 @@ function getEvaluationSize(bridge, baseSize) {
         joints: bridge.joints_rating
     };
     
-    activeSliders.forEach(([key, weight]) => {
+    // SEVERITY SCORING (excluding sufficiency which is a filter)
+    const severitySliders = activeSliders.filter(([k]) => k !== 'sufficiency');
+    
+    if (severitySliders.length === 0) return baseSize;
+    
+    let totalSeverity = 0;
+    let numActiveWithRatings = 0;
+    
+    severitySliders.forEach(([key, sliderValue]) => {
         const rating = ratingMap[key];
-        // Exclude 0 from calculations - treat as N/A
         if (rating != null && rating > 0) {
-            weightedSum += rating * weight;
-            totalWeight += weight;
+            const badness = (9 - rating);
+            const severityContribution = badness * (sliderValue / 100);
+            totalSeverity += severityContribution;
+            numActiveWithRatings++;
         }
     });
     
-    if (totalWeight === 0) return baseSize;
+    if (numActiveWithRatings === 0) return baseSize;
     
-    const weightedAvg = weightedSum / totalWeight;
-    const sizeFactor = (10 - weightedAvg) / 9;
-    // Increased intensity by 5%: was baseSize * 2, now baseSize * 2.1
+    const avgSeverity = totalSeverity / numActiveWithRatings;
+    const sizeFactor = avgSeverity / 8;
     return baseSize + (baseSize * 2.1 * sizeFactor);
 }
 
 function getEvaluationOpacity(bridge) {
-    const ratings = [
-        bridge.deck_rating,
-        bridge.superstructure_rating,
-        bridge.substructure_rating,
-        bridge.bearings_rating,
-        bridge.joints_rating
-    ];
-    
-    // Check if ALL ratings are null/undefined or 0 (treat 0 as N/A for filtering)
-    const hasValidRating = ratings.some(r => r != null && r !== undefined && r > 0);
+    // Get real sufficiency rating
+    const calcSufficiency = getSufficiencyRating(bridge);
     
     const activeSliders = Object.entries(sliderValues).filter(([k, v]) => v > 0);
     
-    // If no sliders active, show all bridges
+    // SUFFICIENCY FILTER: Hide bridges that don't meet threshold
+    const sufficiencySlider = sliderValues.sufficiency;
+    if (sufficiencySlider < 100 && calcSufficiency != null) {
+        const sufficiencyThreshold = sufficiencySlider / 100 * 9;
+        
+        if (sufficiencyMode === 'lte') {
+            // ≤ Mode: Show bridges with sufficiency ≤ threshold
+            if (calcSufficiency > sufficiencyThreshold) {
+                return 0; // Hide bridge
+            }
+        } else {
+            // ≥ Mode: Show bridges with sufficiency ≥ threshold
+            if (calcSufficiency < sufficiencyThreshold) {
+                return 0; // Hide bridge
+            }
+        }
+    }
+    
+    // If no sliders active, show all bridges based on worst rating
     if (activeSliders.length === 0) {
-        if (!hasValidRating) return 0.85; // Show failed/N/A bridges at full opacity when no filtering
-        const validRatings = ratings.filter(r => r != null && r !== undefined && r > 0);
-        const worst = Math.min(...validRatings);
-        // Best (9) = 20% opacity, Worst (1) = 85% opacity
+        const ratings = [
+            bridge.deck_rating,
+            bridge.superstructure_rating,
+            bridge.substructure_rating,
+            bridge.bearings_rating,
+            bridge.joints_rating,
+            calcSufficiency
+        ].filter(r => r != null && r !== undefined && r > 0);
+        
+        if (ratings.length === 0) return 0.85;
+        const worst = Math.min(...ratings);
         return 0.2 + (0.65 * (9 - worst) / 8);
     }
     
-    // Sliders ARE active - hide bridges with ALL N/A or 0
-    if (!hasValidRating) return 0;
-    
-    // Calculate weighted average - ONLY from ratings > 0
-    let totalWeight = 0;
-    let weightedSum = 0;
-    
+    // SEVERITY SCORING with sliders active (excluding sufficiency)
     const ratingMap = {
         deck: bridge.deck_rating,
         superstructure: bridge.superstructure_rating,
@@ -687,24 +807,43 @@ function getEvaluationOpacity(bridge) {
         joints: bridge.joints_rating
     };
     
-    activeSliders.forEach(([key, weight]) => {
+    const severitySliders = activeSliders.filter(([k]) => k !== 'sufficiency');
+    
+    // If only sufficiency is active, show based on worst rating
+    if (severitySliders.length === 0) {
+        const ratings = Object.values(ratingMap).filter(r => r != null && r > 0);
+        if (ratings.length === 0) return 0.85;
+        const worst = Math.min(...ratings);
+        return 0.2 + (0.65 * (9 - worst) / 8);
+    }
+    
+    let totalSeverity = 0;
+    let numActiveWithRatings = 0;
+    
+    severitySliders.forEach(([key, sliderValue]) => {
         const rating = ratingMap[key];
-        // Exclude 0 from calculations - treat as N/A
         if (rating != null && rating !== undefined && rating > 0) {
-            weightedSum += rating * weight;
-            totalWeight += weight;
+            const badness = (9 - rating);
+            const severityContribution = badness * (sliderValue / 100);
+            totalSeverity += severityContribution;
+            numActiveWithRatings++;
         }
     });
     
-    // If no valid ratings for active sliders, hide the bridge
-    if (totalWeight === 0) return 0;
+    if (numActiveWithRatings === 0) return 0;
     
-    const weightedAvg = weightedSum / totalWeight;
-    // Best (9) = 20% opacity, Worst (1) = 85% opacity
-    return 0.2 + (0.65 * (9 - weightedAvg) / 8);
+    const avgSeverity = totalSeverity / numActiveWithRatings;
+    const opacityFactor = avgSeverity / 8;
+    return 0.2 + (0.65 * opacityFactor);
 }
 
 function updateBridgeSizes() {
+    // If inspection filters are active, use inspection update logic
+    if (inspectionFiltersActive) {
+        updateBridgesForInspection();
+        return;
+    }
+    
     const baseSize = getPointSize();
     Object.values(bridgeLayers).forEach(marker => {
         const bridge = marker.bridgeData;
@@ -713,10 +852,24 @@ function updateBridgeSizes() {
         let outlineOpacity = 1;
         const color = getBridgeColor(bridge);
         
-        // Apply search filter if active
-        if (currentSearchQuery.length > 0) {
+        // Check district filter first
+        const districtActive = activeDistricts[bridge.district];
+        if (!districtActive) {
+            opacity = 0;
+            outlineOpacity = 0;
+        }
+        
+        // Apply search filter if active (only if district is active)
+        if (districtActive && currentSearchQuery.length > 0) {
             const bars = (bridge.bars_number || '').toUpperCase();
-            if (!bars.startsWith(currentSearchQuery)) {
+            const name = (bridge.bridge_name || '').toUpperCase();
+            
+            // Smart search: numbers = startsWith, words = includes (contains)
+            const isNumericSearch = /^\d/.test(currentSearchQuery);
+            const matchesBars = isNumericSearch ? bars.startsWith(currentSearchQuery) : bars.includes(currentSearchQuery);
+            const matchesName = isNumericSearch ? name.startsWith(currentSearchQuery) : name.includes(currentSearchQuery);
+            
+            if (!matchesBars && !matchesName) {
                 opacity = 0; // Hide fill
                 outlineOpacity = 0; // Hide outline
             }
@@ -768,14 +921,21 @@ function toggleEvaluationMode() {
 
 function createEvaluationPanel() {
     // Panel already exists in HTML, just set up event listeners
-    const criteria = ['deck', 'superstructure', 'substructure', 'bearings', 'joints'];
+    const criteria = ['deck', 'superstructure', 'substructure', 'bearings', 'joints', 'sufficiency'];
     
     criteria.forEach(key => {
         const slider = document.getElementById(`slider-${key}`);
         if (slider) {
             slider.addEventListener('input', function() {
                 sliderValues[key] = parseInt(this.value);
-                document.getElementById(`value-${key}`).textContent = this.value;
+                // Don't add % to sufficiency
+                const displayValue = (key === 'sufficiency') ? this.value : this.value + '%';
+                document.getElementById(`value-${key}`).textContent = displayValue;
+                
+                // AUTO-APPLY: Activate evaluation mode and update immediately
+                evaluationActive = true;
+                currentMode = 'evaluation';
+                updateBridgeSizes();
             });
         }
     });
@@ -792,12 +952,66 @@ window.resetSliders = function() {
     Object.keys(sliderValues).forEach(key => {
         sliderValues[key] = 0;
         document.getElementById(`slider-${key}`).value = 0;
-        document.getElementById(`value-${key}`).textContent = '0';
+        const displayValue = (key === 'sufficiency') ? '0' : '0%';
+        document.getElementById(`value-${key}`).textContent = displayValue;
     });
     applyEvaluation();
 };
 
 window.applyEvaluation = function() {
+    updateBridgeSizes();
+};
+
+window.resetMaintenanceTab = function() {
+    // Reset all sliders
+    Object.keys(sliderValues).forEach(key => {
+        const defaultValue = (key === 'sufficiency') ? 100 : 0;
+        sliderValues[key] = defaultValue;
+        const slider = document.getElementById(`slider-${key}`);
+        if (slider) slider.value = defaultValue;
+        const displayValue = (key === 'sufficiency') ? '100' : '0%';
+        const valueDisplay = document.getElementById(`value-${key}`);
+        if (valueDisplay) valueDisplay.textContent = displayValue;
+    });
+    
+    // Reset sufficiency mode to ≤
+    sufficiencyMode = 'lte';
+    const toggleBtn = document.getElementById('sufficiency-mode-toggle');
+    if (toggleBtn) toggleBtn.textContent = '≤ Mode';
+    
+    // Deactivate evaluation mode and return to district colors
+    evaluationActive = false;
+    currentMode = 'default';
+    
+    // Get base size for current zoom
+    const baseSize = getPointSize();
+    
+    // Reset all bridges to district colors AND base size
+    Object.entries(bridgeLayers).forEach(([bars, marker]) => {
+        const bridge = bridgesData.find(b => b.bars_number === bars);
+        if (bridge) {
+            const districtActive = activeDistricts[bridge.district];
+            if (districtActive) {
+                marker.setRadius(baseSize); // Reset size!
+                marker.setStyle({
+                    fillColor: districtColors[bridge.district],
+                    fillOpacity: 0.85,
+                    opacity: 1
+                });
+            }
+        }
+    });
+    
+    console.log('Maintenance tab reset');
+};
+
+window.toggleSufficiencyMode = function() {
+    sufficiencyMode = (sufficiencyMode === 'lte') ? 'gte' : 'lte';
+    const toggleBtn = document.getElementById('sufficiency-mode-toggle');
+    if (toggleBtn) {
+        toggleBtn.textContent = (sufficiencyMode === 'lte') ? '≤ Mode' : '≥ Mode';
+    }
+    // Re-evaluate bridges with new mode
     updateBridgeSizes();
 };
 
@@ -847,12 +1061,18 @@ function applySearch() {
         return;
     }
     
-    // Incremental search on BARS number - fade out non-matching bridges
+    // Search on BARS number OR bridge name
     Object.values(bridgeLayers).forEach(marker => {
         const bridge = marker.bridgeData;
         const bars = (bridge.bars_number || '').toUpperCase();
+        const name = (bridge.bridge_name || '').toUpperCase();
         
-        if (bars.startsWith(currentSearchQuery)) {
+        // Smart search: numbers = startsWith, words = includes
+        const isNumericSearch = /^\d/.test(currentSearchQuery);
+        const matchesBars = isNumericSearch ? bars.startsWith(currentSearchQuery) : bars.includes(currentSearchQuery);
+        const matchesName = isNumericSearch ? name.startsWith(currentSearchQuery) : name.includes(currentSearchQuery);
+        
+        if (matchesBars || matchesName) {
             // Match - check if district is active
             const districtActive = activeDistricts[bridge.district];
             if (districtActive) {
@@ -922,13 +1142,57 @@ function setupDistrictToggles() {
     });
 }
 
+window.toggleAllDistricts = function() {
+    const legendItems = document.querySelectorAll('.legend-item');
+    const toggleBtn = document.getElementById('toggleAllDistricts');
+    
+    // Check if all districts are currently active
+    const allActive = Object.values(activeDistricts).every(v => v === true);
+    
+    if (allActive) {
+        // Turn all OFF
+        Object.keys(activeDistricts).forEach(district => {
+            activeDistricts[district] = false;
+        });
+        legendItems.forEach(item => item.classList.add('inactive'));
+        toggleBtn.textContent = 'All On';
+    } else {
+        // Turn all ON
+        Object.keys(activeDistricts).forEach(district => {
+            activeDistricts[district] = true;
+        });
+        legendItems.forEach(item => item.classList.remove('inactive'));
+        toggleBtn.textContent = 'All Off';
+    }
+    
+    // Update bridge visibility
+    updateBridgeVisibility();
+};
+
+function syncToggleAllButton() {
+    const toggleBtn = document.getElementById('toggleAllDistricts');
+    if (!toggleBtn) return;
+    
+    const allActive = Object.values(activeDistricts).every(v => v === true);
+    toggleBtn.textContent = allActive ? 'All Off' : 'All On';
+}
+
 function updateBridgeVisibility() {
     Object.entries(bridgeLayers).forEach(([bars, marker]) => {
-        const bridge = bridgesData.find(b => b.bars === bars);
+        const bridge = bridgesData.find(b => b.bars_number === bars);
         if (!bridge) return;
         
         const districtActive = activeDistricts[bridge.district];
-        const searchMatch = !currentSearchQuery || bars.startsWith(currentSearchQuery);
+        
+        // Search matching (consistent with applySearch)
+        let searchMatch = true;
+        if (currentSearchQuery) {
+            const barsUpper = bars.toUpperCase();
+            const nameUpper = (bridge.bridge_name || '').toUpperCase();
+            const matchesBars = barsUpper.startsWith(currentSearchQuery);
+            const matchesName = nameUpper.includes(currentSearchQuery);
+            searchMatch = matchesBars || matchesName;
+        }
         
         if (districtActive && searchMatch) {
             marker.setStyle({ 
@@ -945,59 +1209,6 @@ function updateBridgeVisibility() {
 }
 
 // Auto-hide functionality
-function setupAutoHide() {
-    const panel = document.getElementById('evaluationPanel');
-    let dragTimeout;
-    
-    // Add auto-hide toggle to panel if not exists
-    const panelBody = panel.querySelector('.panel-body');
-    if (panelBody && !document.getElementById('autoHideToggle')) {
-        const toggleHTML = `
-            <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--box-border);">
-                <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px;">
-                    <label style="font-size: 10pt; color: rgba(255,255,255,0.8);">Auto-hide on drag</label>
-                    <div id="autoHideToggle" style="width: 44px; height: 24px; background: rgba(255,255,255,0.2); border-radius: 12px; cursor: pointer; position: relative; transition: background 0.3s;">
-                        <div id="autoHideKnob" style="width: 20px; height: 20px; background: white; border-radius: 50%; position: absolute; top: 2px; left: 2px; transition: left 0.3s;"></div>
-                    </div>
-                </div>
-            </div>
-        `;
-        panelBody.insertAdjacentHTML('beforeend', toggleHTML);
-        
-        // Toggle handler
-        document.getElementById('autoHideToggle').addEventListener('click', function() {
-            autoHideEnabled = !autoHideEnabled;
-            const knob = document.getElementById('autoHideKnob');
-            const toggle = document.getElementById('autoHideToggle');
-            
-            if (autoHideEnabled) {
-                knob.style.left = '22px';
-                toggle.style.background = 'var(--wvdoh-yellow)';
-            } else {
-                knob.style.left = '2px';
-                toggle.style.background = 'rgba(255,255,255,0.2)';
-            }
-        });
-    }
-    
-    // Map drag handlers
-    map.on('dragstart', () => {
-        if (autoHideEnabled && panel.classList.contains('open')) {
-            panel.style.transition = 'left 0.2s ease';
-            panel.style.left = '-320px';
-        }
-    });
-    
-    map.on('dragend', () => {
-        if (autoHideEnabled) {
-            clearTimeout(dragTimeout);
-            dragTimeout = setTimeout(() => {
-                panel.style.left = '0';
-            }, 1000);
-        }
-    });
-}
-
 window.addEventListener('DOMContentLoaded', init);
 
 // Update toggle function for folder tab
@@ -1019,3 +1230,529 @@ window.toggleEvaluationPanel = function() {
         updateBridgeSizes();
     }
 };
+
+// Section switcher
+window.switchSection = function(section) {
+    console.log('Switching to:', section);
+    
+    // Close all popups
+    closeAllMenus();
+    
+    // Handle leaving inspection tab
+    if (section !== 'inspection' && inspectionFiltersActive) {
+        console.log('Leaving inspection, resetting...');
+        resetInspectionView();
+    }
+    
+    // Handle leaving maintenance tab
+    if (section !== 'maintenance' && evaluationActive) {
+        console.log('Leaving maintenance, resetting sliders...');
+        // Reset sliders
+        Object.keys(sliderValues).forEach(key => {
+            sliderValues[key] = 0;
+            const slider = document.getElementById(`slider-${key}`);
+            const valueDisplay = document.getElementById(`value-${key}`);
+            if (slider) slider.value = 0;
+            if (valueDisplay) valueDisplay.textContent = '0%';
+        });
+        evaluationActive = false;
+        currentMode = 'default';
+        const statusBar = document.getElementById('statusBar');
+        if (statusBar) statusBar.style.display = 'none';
+        updateBridgeSizes();
+    }
+    
+    // Handle entering maintenance tab - ensure clean state
+    if (section === 'maintenance') {
+        console.log('Entering maintenance tab');
+        // Make sure we're not in inspection mode
+        if (inspectionFiltersActive) {
+            resetInspectionView();
+        }
+        // Start in default mode (not evaluation until sliders moved)
+        currentMode = 'default';
+        evaluationActive = false;
+        
+        // RESET TO DISTRICT COLORS
+        console.log('Resetting to district colors...');
+        Object.entries(bridgeLayers).forEach(([bars, marker]) => {
+            const bridge = bridgesData.find(b => b.bars_number === bars);
+            if (bridge) {
+                const districtActive = activeDistricts[bridge.district];
+                if (districtActive) {
+                    marker.setStyle({
+                        fillColor: districtColors[bridge.district],
+                        fillOpacity: 0.85,
+                        opacity: 1
+                    });
+                }
+            }
+        });
+    }
+    
+    // Update button states
+    const inspectionBtn = document.querySelector('.section-btn.inspection');
+    const maintenanceBtn = document.querySelector('.section-btn.maintenance');
+    
+    if (inspectionBtn) inspectionBtn.classList.remove('active');
+    if (maintenanceBtn) maintenanceBtn.classList.remove('active');
+    
+    if (section === 'inspection' && inspectionBtn) {
+        inspectionBtn.classList.add('active');
+    } else if (section === 'maintenance' && maintenanceBtn) {
+        maintenanceBtn.classList.add('active');
+    }
+    
+    // Update content visibility
+    const inspectionSection = document.getElementById('inspectionSection');
+    const maintenanceSection = document.getElementById('maintenanceSection');
+    
+    if (inspectionSection) inspectionSection.classList.remove('active');
+    if (maintenanceSection) maintenanceSection.classList.remove('active');
+    
+    if (section === 'inspection' && inspectionSection) {
+        inspectionSection.classList.add('active');
+    } else if (section === 'maintenance' && maintenanceSection) {
+        maintenanceSection.classList.add('active');
+    }
+    
+    console.log('✓ Switched to:', section);
+};
+
+// ========================================
+// INSPECTION SYSTEM
+// ========================================
+
+// Apply inspection filters
+window.applyInspectionFilters = function() {
+    // Get selected inspection types
+    selectedInspectionTypes = [];
+    document.querySelectorAll('[id^="insp-"]:checked').forEach(cb => {
+        selectedInspectionTypes.push(cb.value);
+    });
+    
+    // Get selected months
+    selectedMonths = [];
+    document.querySelectorAll('.month-checkbox:checked').forEach(cb => {
+        selectedMonths.push(parseInt(cb.value));
+    });
+    
+    // Activate inspection mode ONLY if types or months are selected
+    if (selectedInspectionTypes.length > 0 || selectedMonths.length > 0) {
+        inspectionFiltersActive = true;
+        currentMode = 'inspection';
+        updateStatusBar();
+        updateBridgesForInspection();
+    } else {
+        // No filters - return to default view
+        inspectionFiltersActive = false;
+        currentMode = 'default';
+        document.getElementById('statusBar').style.display = 'none';
+        updateBridgeSizes(); // Reset to default
+    }
+};
+
+// Auto-apply inspection filters when checkboxes change
+document.addEventListener('DOMContentLoaded', function() {
+    // Add listeners to all inspection type checkboxes
+    document.querySelectorAll('[id^="insp-"]').forEach(cb => {
+        cb.addEventListener('change', applyInspectionFilters);
+    });
+    
+    // Add listeners to all month checkboxes
+    document.querySelectorAll('.month-checkbox').forEach(cb => {
+        cb.addEventListener('change', applyInspectionFilters);
+    });
+});
+
+// Reset inspection view
+window.resetInspectionView = function() {
+    // Uncheck all inspection type checkboxes
+    document.querySelectorAll('[id^="insp-"]').forEach(cb => cb.checked = false);
+    
+    // Uncheck all month checkboxes
+    document.querySelectorAll('.month-checkbox').forEach(cb => cb.checked = false);
+    
+    // Reset state
+    selectedInspectionTypes = [];
+    selectedMonths = [];
+    showOverduePlus = false;
+    inspectionFiltersActive = false;
+    currentMode = 'default';
+    
+    // Hide status bar
+    const statusBar = document.getElementById('statusBar');
+    if (statusBar) statusBar.style.display = 'none';
+    
+    // Reset bridge display to default
+    updateBridgeSizes();
+};
+
+window.resetInspectionTab = function() {
+    // Just call the existing reset function
+    resetInspectionView();
+    console.log('Inspection tab reset');
+};
+
+// ESC key to reset
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && inspectionFiltersActive) {
+        resetInspectionView();
+    }
+});
+
+// Update status bar
+function updateStatusBar() {
+    const statusBar = document.getElementById('statusBar');
+    const statusText = document.getElementById('statusText');
+    
+    if (!inspectionFiltersActive) {
+        statusBar.style.display = 'none';
+        return;
+    }
+    
+    statusBar.style.display = 'flex';
+    
+    // Simple format: "Inspection View | Routine"
+    let text = 'Inspection View';
+    if (selectedInspectionTypes.length > 0) {
+        text += ' | ' + selectedInspectionTypes.join(', ');
+    }
+    
+    statusText.textContent = text;
+}
+
+// Calculate inspection status for a bridge
+function getInspectionStatus(bridge) {
+    const bars = bridge.bars_number;
+    const inspections = inspectionsData[bars];
+    
+    if (!inspections || inspections.length === 0) {
+        return { hasInspections: false, overdueCount: 0, nearestDue: null };
+    }
+    
+    const today = new Date();
+    let overdueCount = 0;
+    let nearestDue = null;
+    let nearestDueDate = null;
+    
+    inspections.forEach(insp => {
+        if (!insp.due) return;
+        
+        // Parse due date
+        const dueDate = parseDateString(insp.due);
+        if (!dueDate) return;
+        
+        // Check if overdue
+        if (dueDate < today) {
+            overdueCount++;
+        }
+        
+        // Track nearest due date
+        if (!nearestDueDate || dueDate < nearestDueDate) {
+            nearestDueDate = dueDate;
+            nearestDue = insp;
+        }
+    });
+    
+    return { hasInspections: true, overdueCount, nearestDue, nearestDueDate };
+}
+
+// Parse date string (handles MM/DD/YYYY and ISO formats)
+function parseDateString(dateStr) {
+    if (!dateStr) return null;
+    
+    try {
+        // Try ISO format first
+        if (dateStr.includes('T')) {
+            return new Date(dateStr);
+        }
+        
+        // Try MM/DD/YYYY format
+        const parts = dateStr.split('/');
+        if (parts.length === 3) {
+            return new Date(parts[2], parts[0] - 1, parts[1]);
+        }
+        
+        return new Date(dateStr);
+    } catch (e) {
+        return null;
+    }
+}
+
+// Update bridges based on inspection filters
+function updateBridgesForInspection() {
+    const today = new Date();
+    const baseSize = getPointSize();
+    
+    // Array to track bridges by overdue count for drawing order
+    const bridgesByOverdue = [];
+    
+    Object.entries(bridgeLayers).forEach(([bars, marker]) => {
+        const bridge = bridgesData.find(b => b.bars_number === bars);
+        if (!bridge) return;
+        
+        // CHECK DISTRICT FILTER FIRST
+        const districtActive = activeDistricts[bridge.district];
+        if (!districtActive) {
+            marker.setStyle({ fillOpacity: 0, opacity: 0 });
+            return;
+        }
+        
+        const inspections = inspectionsData[bars];
+        
+        let show = false;
+        let color = districtColors[bridge.district] || '#00d9ff';  // Default to district color
+        let size = baseSize;
+        let overdueCount = 0;
+        let daysOverdue = 0;
+        
+        if (inspections && inspections.length > 0) {
+            // Filter by inspection type if selected
+            let relevantInspections = inspections;
+            if (selectedInspectionTypes.length > 0) {
+                relevantInspections = inspections.filter(insp => 
+                    selectedInspectionTypes.includes(insp.type)
+                );
+                
+                // If no relevant inspections after type filter, hide
+                if (relevantInspections.length === 0) {
+                    marker.setStyle({ fillOpacity: 0, opacity: 0 });
+                    return;
+                }
+            }
+            
+            // Calculate overdue count and due dates
+            let matchesMonth = false;
+            
+            relevantInspections.forEach(insp => {
+                if (!insp.due) return;
+                
+                const dueDate = parseDateString(insp.due);
+                if (!dueDate) return;
+                
+                // Check if overdue
+                if (dueDate < today) {
+                    overdueCount++;
+                    const daysDiff = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+                    daysOverdue = Math.max(daysOverdue, daysDiff);
+                }
+                
+                // Check if matches selected month
+                if (selectedMonths.length > 0) {
+                    const dueMonth = dueDate.getMonth() + 1;
+                    if (selectedMonths.includes(dueMonth)) {
+                        matchesMonth = true;
+                    }
+                }
+            });
+            
+            // Determine if bridge should be shown
+            if (selectedMonths.length > 0) {
+                show = matchesMonth;
+            } else if (selectedInspectionTypes.length > 0) {
+                // Types selected - show only bridges with those types
+                show = true;
+            } else {
+                // NO filters - show ALL bridges
+                show = true;
+            }
+            
+            if (show) {
+                // SIZE: Based on number of overdue inspections
+                if (overdueCount > 0) {
+                    size = baseSize + (overdueCount * 3); // +3px per overdue
+                    size = Math.min(size, 25); // Cap at 25px
+                }
+                
+                // COLOR: Use inspection color scheme when filters are active
+                if (overdueCount > 0) {
+                    // Red gradient based on days overdue
+                    if (daysOverdue > 180) {
+                        color = '#7F1D1D'; // Dark red (6+ months overdue)
+                    } else if (daysOverdue > 90) {
+                        color = '#991B1B'; // Red (3-6 months overdue)
+                    } else if (daysOverdue > 30) {
+                        color = '#DC2626'; // Bright red (1-3 months overdue)
+                    } else {
+                        color = '#EF4444'; // Light red (recently overdue)
+                    }
+                } else if (selectedInspectionTypes.length > 0 || selectedMonths.length > 0) {
+                    // Filters active and NOT overdue = Green
+                    color = '#10B981';
+                } else {
+                    // No filters active - use district colors
+                    color = districtColors[bridge.district] || '#00d9ff';
+                }
+            }
+        } else {
+            // No inspection data
+            if (selectedInspectionTypes.length === 0 && selectedMonths.length === 0) {
+                // No filters - show bridge with district color
+                show = true;
+            }
+        }
+        
+        if (show) {
+            bridgesByOverdue.push({ marker, overdueCount, color, size });
+        } else {
+            marker.setStyle({ fillOpacity: 0, opacity: 0 });
+        }
+    });
+    
+    // Sort by overdue count (lowest first so highest drawn last)
+    bridgesByOverdue.sort((a, b) => a.overdueCount - b.overdueCount);
+    
+    // Apply styles in order (draws in order on map)
+    bridgesByOverdue.forEach(({ marker, color, size }) => {
+        marker.setRadius(size);
+        marker.setStyle({
+            fillColor: color,
+            fillOpacity: 0.85,
+            opacity: 1
+        });
+        marker.bringToFront(); // Ensure proper z-ordering
+    });
+}
+
+// Add Inspections to radial menu
+function addInspectionsToRadialMenu(bridge) {
+    const bars = bridge.bars_number;
+    const inspections = inspectionsData[bars];
+    
+    if (!inspections || inspections.length === 0) {
+        return null;
+    }
+    
+    return {
+        label: 'Inspection',
+        action: () => showInspectionsPopup(bridge)
+    };
+}
+
+// Show inspections popup
+function showInspectionsPopup(bridge) {
+    const bars = bridge.bars_number;
+    const inspections = inspectionsData[bars];
+    
+    if (!inspections || inspections.length === 0) {
+        alert('No inspection data available for this bridge.');
+        return;
+    }
+    
+    // Sort inspections by status (overdue first) then by due date
+    const today = new Date();
+    const sorted = inspections.slice().sort((a, b) => {
+        const aDate = parseDateString(a.due);
+        const bDate = parseDateString(b.due);
+        
+        if (!aDate && !bDate) return 0;
+        if (!aDate) return 1;
+        if (!bDate) return -1;
+        
+        const aOverdue = aDate < today;
+        const bOverdue = bDate < today;
+        
+        if (aOverdue && !bOverdue) return -1;
+        if (!aOverdue && bOverdue) return 1;
+        
+        return aDate - bDate;
+    });
+    
+    // Create popup HTML
+    let html = `
+        <div style="font-family: 'Aptos', sans-serif; max-width: 600px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 10pt;">
+                <thead>
+                    <tr style="background: rgba(0, 40, 85, 0.3); border-bottom: 2px solid #FFB81C;">
+                        <th style="padding: 8px; text-align: left;">Type</th>
+                        <th style="padding: 8px; text-align: left;">Begin</th>
+                        <th style="padding: 8px; text-align: left;">Completion</th>
+                        <th style="padding: 8px; text-align: left;">Due</th>
+                        <th style="padding: 8px; text-align: left;">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+    
+    sorted.forEach(insp => {
+        const dueDate = parseDateString(insp.due);
+        const completionDate = parseDateString(insp.completion);
+        const today = new Date();
+        const intervalMonths = insp.interval || 24; // Default to 24 months if not specified
+        let status = '—';
+        let rowStyle = '';
+        
+        if (dueDate) {
+            // Calculate previous cycle's due date
+            const previousDueDate = new Date(dueDate);
+            previousDueDate.setMonth(previousDueDate.getMonth() - intervalMonths);
+            
+            // HAS completion date - determine which cycle it belongs to
+            if (completionDate) {
+                // Check if completion belongs to current cycle
+                if (completionDate > previousDueDate) {
+                    // CURRENT CYCLE - check if on time or overdue
+                    if (completionDate <= dueDate) {
+                        status = `✓ On Time`;
+                        rowStyle = 'background: rgba(16, 185, 129, 0.1); color: #6EE7B7;';
+                    } else {
+                        const daysLate = Math.floor((completionDate - dueDate) / (1000 * 60 * 60 * 24));
+                        status = `⚠ Overdue (${daysLate} days)`;
+                        rowStyle = 'background: rgba(245, 158, 11, 0.2); color: #FCD34D;';
+                    }
+                } else {
+                    // PREVIOUS CYCLE - check if current cycle is past due
+                    if (today > dueDate) {
+                        const daysPastDue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+                        status = `⚠ PAST DUE (${daysPastDue} days)`;
+                        rowStyle = 'background: rgba(220, 38, 38, 0.2); color: #FCA5A5;';
+                    } else {
+                        const daysUntilDue = Math.floor((dueDate - today) / (1000 * 60 * 60 * 24));
+                        if (daysUntilDue <= 30) {
+                            status = `⚠ Due Soon (${daysUntilDue} days)`;
+                            rowStyle = 'background: rgba(245, 158, 11, 0.1);';
+                        } else {
+                            status = `Upcoming (due ${insp.due})`;
+                        }
+                    }
+                }
+            } 
+            // NO completion date - check if past due
+            else {
+                if (today > dueDate) {
+                    const daysPastDue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+                    status = `⚠ PAST DUE (${daysPastDue} days)`;
+                    rowStyle = 'background: rgba(220, 38, 38, 0.2); color: #FCA5A5;';
+                } else {
+                    const daysUntilDue = Math.floor((dueDate - today) / (1000 * 60 * 60 * 24));
+                    if (daysUntilDue <= 30) {
+                        status = `⚠ Due Soon (${daysUntilDue} days)`;
+                        rowStyle = 'background: rgba(245, 158, 11, 0.1);';
+                    } else {
+                        status = `Upcoming (due ${insp.due})`;
+                    }
+                }
+            }
+        }
+        
+        html += `
+            <tr style="${rowStyle} border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
+                <td style="padding: 8px;">${insp.type}</td>
+                <td style="padding: 8px;">${insp.begin || '—'}</td>
+                <td style="padding: 8px;">${insp.completion || '—'}</td>
+                <td style="padding: 8px;">${insp.due || '—'}</td>
+                <td style="padding: 8px;">${status}</td>
+            </tr>
+        `;
+    });
+    
+    html += `
+                </tbody>
+            </table>
+        </div>
+    `;
+    
+    // Create info panel
+    createInfoPanel('Inspections', html, bridge);
+}

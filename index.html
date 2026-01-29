@@ -168,9 +168,117 @@
         .panel-body {
             padding: 20px; overflow-y: auto; flex: 1;
         }
+        
+        .section-switcher {
+            display: flex; background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px; padding: 4px; margin-bottom: 20px;
+        }
+        .section-btn {
+            flex: 1; padding: 12px 16px; border: none;
+            background: transparent; color: rgba(255, 255, 255, 0.6);
+            font-size: 11pt; font-weight: 600;
+            cursor: pointer; border-radius: 6px; transition: all 0.3s;
+        }
+        .section-btn.active { 
+            color: #fff; 
+            background: var(--wvdoh-blue);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); 
+        }
+        .section-content { display: none; }
+        .section-content.active { display: block; }
+        
         .panel-instructions {
             font-size: 10pt; color: rgba(255, 255, 255, 0.8); 
             margin-bottom: 20px; line-height: 1.5;
+        }
+        
+        .section-title {
+            font-size: 10pt;
+            color: var(--wvdoh-yellow);
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .inspection-types-section,
+        .inspection-months-section,
+        .inspection-options-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+        }
+        
+        .checkbox-label {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 10pt;
+            color: rgba(255, 255, 255, 0.9);
+            cursor: pointer;
+            padding: 2px 0;
+        }
+        .checkbox-label input {
+            margin-right: 8px;
+            cursor: pointer;
+            accent-color: var(--wvdoh-yellow);
+        }
+        .checkbox-label:hover {
+            color: #fff;
+        }
+        
+        .months-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+        }
+        
+        .inspection-actions {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .inspection-legend {
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+        }
+        
+        .legend-item-inline {
+            display: flex;
+            align-items: center;
+            margin-bottom: 6px;
+            font-size: 9pt;
+            color: rgba(255, 255, 255, 0.8);
+        }
+        
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .status-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 40px;
+            background: rgba(0, 40, 85, 0.95);
+            border-top: 2px solid var(--wvdoh-yellow);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            backdrop-filter: blur(10px);
+        }
+        .status-bar span {
+            color: var(--wvdoh-yellow);
+            font-size: 11pt;
+            font-weight: 600;
+            letter-spacing: 0.5px;
         }
         
         .slider-group { margin-bottom: 20px; }
@@ -216,7 +324,7 @@
         .btn-apply:hover { background: #FFC940; }
         
         .legend {
-            position: absolute; bottom: 20px; right: 20px; z-index: 1000;
+            position: absolute; bottom: 40px; right: 20px; z-index: 1000;
             background: var(--box-bg); padding: 15px 20px;
             border-radius: 8px; border: 1px solid var(--box-border); 
             max-width: 250px;
@@ -475,16 +583,16 @@
     </div>
     
     <div class="last-updated">
-        Last updated on January 20, 2026
+        Last updated on January 29, 2026 | Version 6.0
     </div>
     
     <div class="header">
         <div class="header-overlay"></div>
         <h1>SpanBase</h1>
         <div class="subtitle">Operations Division – 0066</div>
-        <div class="email"><a href="/cdn-cgi/l/email-protection#0d676c7e62632369236f7f746c634d7a7b236a627b"><span class="__cf_email__" data-cfemail="fb919a889495d59fd59989829a95bb8c8dd59c948d">[email&#160;protected]</span></a></div>
+        <div class="email"><a href="mailto:jason.d.bryan@wv.gov">jason.d.bryan@wv.gov</a></div>
         <div class="search">
-            <input type="text" id="searchInput" placeholder="BARS Search...">
+            <input type="text" id="searchInput" placeholder="Search...">
         </div>
     </div>
     
@@ -498,50 +606,104 @@
             <h3>Condition Filter</h3>
         </div>
         <div class="panel-body">
-            <p class="panel-instructions">
-                Adjust sliders to weight bridge components. Higher values emphasize worse conditions. Missing ratings (N/A) are excluded from calculations.
-            </p>
-            <p class="panel-instructions" style="font-size: 9pt; font-style: italic; color: rgba(255,255,255,0.6); margin-top: -10px; margin-bottom: 20px;">
-                Note: Colors show worst available rating. Bridges without any ratings appear gray.
-            </p>
-            <div class="slider-group">
+            <div class="section-switcher">
+                <button class="section-btn maintenance active" onclick="switchSection('maintenance')">Maintenance</button>
+                <button class="section-btn inspection" onclick="switchSection('inspection')">Inspection</button>
+            </div>
+            
+            <div id="inspectionSection" class="section-content">
+                <p class="panel-instructions">
+                    Filter bridges by inspection type and due dates.
+                </p>
+                
+                <div class="inspection-types-section">
+                    <h4 class="section-title">Inspection Types</h4>
+                    <label class="checkbox-label"><input type="checkbox" id="insp-routine" value="Routine"> Routine</label>
+                    <label class="checkbox-label"><input type="checkbox" id="insp-indepth" value="In-Depth"> In-Depth</label>
+                    <label class="checkbox-label"><input type="checkbox" id="insp-initial" value="Initial"> Initial</label>
+                    <label class="checkbox-label"><input type="checkbox" id="insp-nstm" value="NSTM"> NSTM</label>
+                    <label class="checkbox-label"><input type="checkbox" id="insp-special" value="Special"> Special</label>
+                    <label class="checkbox-label"><input type="checkbox" id="insp-underwater" value="Underwater"> Underwater</label>
+                    <label class="checkbox-label"><input type="checkbox" id="insp-damage" value="Damage"> Damage</label>
+                </div>
+                
+                <div class="inspection-months-section">
+                    <h4 class="section-title">Months</h4>
+                    <div class="months-grid">
+                        <label class="checkbox-label"><input type="checkbox" class="month-checkbox" value="1"> Jan</label>
+                        <label class="checkbox-label"><input type="checkbox" class="month-checkbox" value="2"> Feb</label>
+                        <label class="checkbox-label"><input type="checkbox" class="month-checkbox" value="3"> Mar</label>
+                        <label class="checkbox-label"><input type="checkbox" class="month-checkbox" value="4"> Apr</label>
+                        <label class="checkbox-label"><input type="checkbox" class="month-checkbox" value="5"> May</label>
+                        <label class="checkbox-label"><input type="checkbox" class="month-checkbox" value="6"> Jun</label>
+                        <label class="checkbox-label"><input type="checkbox" class="month-checkbox" value="7"> Jul</label>
+                        <label class="checkbox-label"><input type="checkbox" class="month-checkbox" value="8"> Aug</label>
+                        <label class="checkbox-label"><input type="checkbox" class="month-checkbox" value="9"> Sep</label>
+                        <label class="checkbox-label"><input type="checkbox" class="month-checkbox" value="10"> Oct</label>
+                        <label class="checkbox-label"><input type="checkbox" class="month-checkbox" value="11"> Nov</label>
+                        <label class="checkbox-label"><input type="checkbox" class="month-checkbox" value="12"> Dec</label>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="maintenanceSection" class="section-content active">
+                <p class="panel-instructions">
+                    Adjust sliders to weight bridge components. Higher values emphasize worse conditions. Missing ratings (N/A) are excluded from calculations.
+                </p>
+                <p class="panel-instructions" style="font-size: 9pt; font-style: italic; color: rgba(255,255,255,0.6); margin-top: -10px; margin-bottom: 20px;">
+                    Note: Colors show worst available rating. Bridges without any ratings appear gray.
+                </p>
+                <div class="slider-group">
                 <label>Deck</label>
                 <div class="slider-container">
-                    <input type="range" id="slider-deck" min="0" max="10" value="0" class="eval-slider">
-                    <span class="slider-value" id="value-deck">0</span>
+                    <input type="range" id="slider-deck" min="0" max="100" step="10" value="0" class="eval-slider">
+                    <span class="slider-value" id="value-deck">0%</span>
                 </div>
             </div>
             <div class="slider-group">
                 <label>Superstructure</label>
                 <div class="slider-container">
-                    <input type="range" id="slider-superstructure" min="0" max="10" value="0" class="eval-slider">
-                    <span class="slider-value" id="value-superstructure">0</span>
+                    <input type="range" id="slider-superstructure" min="0" max="100" step="10" value="0" class="eval-slider">
+                    <span class="slider-value" id="value-superstructure">0%</span>
                 </div>
             </div>
             <div class="slider-group">
                 <label>Substructure</label>
                 <div class="slider-container">
-                    <input type="range" id="slider-substructure" min="0" max="10" value="0" class="eval-slider">
-                    <span class="slider-value" id="value-substructure">0</span>
+                    <input type="range" id="slider-substructure" min="0" max="100" step="10" value="0" class="eval-slider">
+                    <span class="slider-value" id="value-substructure">0%</span>
                 </div>
             </div>
             <div class="slider-group">
                 <label>Bearings</label>
                 <div class="slider-container">
-                    <input type="range" id="slider-bearings" min="0" max="10" value="0" class="eval-slider">
-                    <span class="slider-value" id="value-bearings">0</span>
+                    <input type="range" id="slider-bearings" min="0" max="100" step="10" value="0" class="eval-slider">
+                    <span class="slider-value" id="value-bearings">0%</span>
                 </div>
             </div>
             <div class="slider-group">
                 <label>Joints</label>
                 <div class="slider-container">
-                    <input type="range" id="slider-joints" min="0" max="10" value="0" class="eval-slider">
-                    <span class="slider-value" id="value-joints">0</span>
+                    <input type="range" id="slider-joints" min="0" max="100" step="10" value="0" class="eval-slider">
+                    <span class="slider-value" id="value-joints">0%</span>
                 </div>
             </div>
-            <div class="panel-actions">
-                <button class="btn-reset" onclick="resetSliders()">Reset All</button>
-                <button class="btn-apply" onclick="applyEvaluation()">Apply</button>
+            <div class="slider-group" style="background: rgba(0, 40, 85, 0.6); padding: 12px; border-radius: 6px; border: 2px solid var(--wvdoh-yellow); margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <label style="margin: 0;">Calc. Sufficiency</label>
+                    <button id="sufficiency-mode-toggle" onclick="toggleSufficiencyMode()" style="padding: 4px 10px; font-size: 8pt; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--wvdoh-yellow); border-radius: 3px; cursor: pointer; color: var(--wvdoh-yellow); font-weight: 600;">≤ Mode</button>
+                </div>
+                <div class="slider-container">
+                    <input type="range" id="slider-sufficiency" min="0" max="100" step="5" value="100" class="eval-slider">
+                    <span class="slider-value" id="value-sufficiency">100</span>
+                </div>
+            </div>
+            </div>
+            
+            <!-- Reset Button for Maintenance -->
+            <div style="margin-top: 15px; text-align: center;">
+                <button onclick="resetMaintenanceTab()" style="padding: 8px 20px; font-size: 10pt; background: var(--wvdoh-yellow); border: none; border-radius: 4px; cursor: pointer; font-weight: 600; color: var(--wvdoh-blue);">Reset</button>
+            </div>
             </div>
         </div>
     </div>
@@ -549,7 +711,7 @@
     <div class="legend">
         <h4>Districts</h4>
         <div class="legend-item"><div class="legend-color" style="background: #e63946;"></div> District 1</div>
-        <div class="legend-item"><div class="legend-color" style="background: #f77f00;"></div> District 2</div>
+        <div class="legend-item"><div class="legend-color" style="background: #10B981;"></div> District 2</div>
         <div class="legend-item"><div class="legend-color" style="background: #fcbf49;"></div> District 3</div>
         <div class="legend-item"><div class="legend-color" style="background: #06d6a0;"></div> District 4</div>
         <div class="legend-item"><div class="legend-color" style="background: #118ab2;"></div> District 5</div>
@@ -557,7 +719,17 @@
         <div class="legend-item"><div class="legend-color" style="background: #8338ec;"></div> District 7</div>
         <div class="legend-item"><div class="legend-color" style="background: #ff006e;"></div> District 8</div>
         <div class="legend-item"><div class="legend-color" style="background: #3a86ff;"></div> District 9</div>
-        <div class="legend-item"><div class="legend-color" style="background: #fb5607;"></div> District 10</div>
+        <div class="legend-item"><div class="legend-color" style="background: #F59E0B;"></div> District 10</div>
+        
+        <div style="text-align: center; margin-top: 15px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.2);">
+            <button id="toggleAllDistricts" onclick="toggleAllDistricts()" style="padding: 6px 16px; font-size: 9pt; background: var(--wvdoh-yellow); border: none; border-radius: 4px; cursor: pointer; font-weight: 600; color: var(--wvdoh-blue);">All Off</button>
+        </div>
+    </div>
+    
+    <!-- Zoom Level Display -->
+    <div style="position: absolute; bottom: 40px; left: 20px; z-index: 1000; background: var(--box-bg); padding: 10px 15px; border-radius: 6px; border: 1px solid var(--box-border); backdrop-filter: blur(10px); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);">
+        <div style="font-size: 9pt; color: rgba(255, 255, 255, 0.6); margin-bottom: 4px;">Zoom</div>
+        <div id="zoomDisplay" style="font-size: 14pt; font-weight: 700; color: var(--wvdoh-yellow);">8</div>
     </div>
     
     <div class="scale-reference">
@@ -581,6 +753,10 @@
             <div class="scale-block" style="width: 50px; height: 50px;"></div>
             <div class="scale-label">50px</div>
         </div>
+    </div>
+    
+    <div class="status-bar" id="statusBar" style="display: none;">
+        <span id="statusText">MODE: Default</span>
     </div>
     
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
