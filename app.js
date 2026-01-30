@@ -1293,11 +1293,28 @@ window.switchSection = function(section) {
             const bridge = bridgesData.find(b => b.bars_number === bars);
             if (bridge) {
                 const districtActive = activeDistricts[bridge.district];
-                if (districtActive) {
+                
+                // Check search filter
+                let matchesSearch = true;
+                if (currentSearchQuery.length > 0) {
+                    const barsUpper = (bridge.bars_number || '').toUpperCase();
+                    const nameUpper = (bridge.bridge_name || '').toUpperCase();
+                    const isNumericSearch = /^\d/.test(currentSearchQuery);
+                    const matchesBars = isNumericSearch ? barsUpper.startsWith(currentSearchQuery) : barsUpper.includes(currentSearchQuery);
+                    const matchesName = isNumericSearch ? nameUpper.startsWith(currentSearchQuery) : nameUpper.includes(currentSearchQuery);
+                    matchesSearch = matchesBars || matchesName;
+                }
+                
+                if (districtActive && matchesSearch) {
                     marker.setStyle({
                         fillColor: districtColors[bridge.district],
                         fillOpacity: 0.85,
                         opacity: 1
+                    });
+                } else {
+                    marker.setStyle({
+                        fillOpacity: 0,
+                        opacity: 0
                     });
                 }
             }
@@ -1406,6 +1423,18 @@ window.resetInspectionTab = function() {
     // Just call the existing reset function
     resetInspectionView();
     console.log('Inspection tab reset');
+};
+
+// Smart reset - detects which tab is active and calls appropriate function
+window.resetCurrentTab = function() {
+    const inspectionSection = document.getElementById('inspectionSection');
+    const maintenanceSection = document.getElementById('maintenanceSection');
+    
+    if (inspectionSection && inspectionSection.classList.contains('active')) {
+        resetInspectionTab();
+    } else if (maintenanceSection && maintenanceSection.classList.contains('active')) {
+        resetMaintenanceTab();
+    }
 };
 
 // ESC key to reset
