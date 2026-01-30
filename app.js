@@ -112,6 +112,10 @@ async function init() {
         createEvaluationPanel();
         setupDistrictToggles();
         
+        // Initialize zoom display
+        const zoomDisplay = document.getElementById('zoomDisplay');
+        if (zoomDisplay) zoomDisplay.textContent = currentZoom;
+        
         map.on('zoomend', function() {
             currentZoom = map.getZoom();
             const zoomDisplay = document.getElementById('zoomDisplay');
@@ -172,7 +176,7 @@ function addBridges() {
         marker.bridgeData = bridge;
         
         marker.on('mouseover', function(e) {
-            if (currentZoom > 11) {
+            if (currentZoom >= 10) {
                 showNameTooltip(e, bridge);
             }
         });
@@ -644,7 +648,12 @@ function getEvaluationColor(bridge) {
     
     // SUFFICIENCY FILTER: If sufficiency slider is active, filter by it
     const sufficiencySlider = sliderValues.sufficiency;
-    if (sufficiencySlider < 100 && calcSufficiency != null) {
+    if (sufficiencySlider < 100) {
+        // If bridge has no sufficiency data, hide it when filter is active
+        if (calcSufficiency == null) {
+            return '#6b7280'; // Gray (will be hidden by opacity=0)
+        }
+        
         // Convert slider value (0-100) to rating threshold (0-9)
         const sufficiencyThreshold = sufficiencySlider / 100 * 9;
         
@@ -766,7 +775,12 @@ function getEvaluationOpacity(bridge) {
     
     // SUFFICIENCY FILTER: Hide bridges that don't meet threshold
     const sufficiencySlider = sliderValues.sufficiency;
-    if (sufficiencySlider < 100 && calcSufficiency != null) {
+    if (sufficiencySlider < 100) {
+        // Hide bridges without sufficiency data when filter is active
+        if (calcSufficiency == null) {
+            return 0; // Hide bridge
+        }
+        
         const sufficiencyThreshold = sufficiencySlider / 100 * 9;
         
         if (sufficiencyMode === 'lte') {
@@ -1593,6 +1607,19 @@ function updateBridgesForInspection() {
             }
         }
         
+        // Apply search filter if active
+        if (show && currentSearchQuery.length > 0) {
+            const bars = (bridge.bars_number || '').toUpperCase();
+            const name = (bridge.bridge_name || '').toUpperCase();
+            const isNumericSearch = /^\d/.test(currentSearchQuery);
+            const matchesBars = isNumericSearch ? bars.startsWith(currentSearchQuery) : bars.includes(currentSearchQuery);
+            const matchesName = isNumericSearch ? name.startsWith(currentSearchQuery) : name.includes(currentSearchQuery);
+            
+            if (!matchesBars && !matchesName) {
+                show = false; // Hide if doesn't match search
+            }
+        }
+        
         if (show) {
             bridgesByOverdue.push({ marker, overdueCount, color, size });
         } else {
@@ -1694,26 +1721,31 @@ function showInspectionsPopup(bridge) {
                 if (completionDate > previousDueDate) {
                     // CURRENT CYCLE - check if on time or overdue
                     if (completionDate <= dueDate) {
-                        status = `✓ On Time`;
+                        const daysEarly = Math.floor((dueDate - completionDate) / (1000 * 60 * 60 * 24));
+                        if (daysEarly === 0) {
+                            status = `✓ On Time (due by 0 days)`;
+                        } else {
+                            status = `✓ On Time (due in ${daysEarly} days)`;
+                        }
                         rowStyle = 'background: rgba(16, 185, 129, 0.1); color: #6EE7B7;';
                     } else {
                         const daysLate = Math.floor((completionDate - dueDate) / (1000 * 60 * 60 * 24));
-                        status = `⚠ Overdue (${daysLate} days)`;
+                        status = `⚠ Overdue (overdue by ${daysLate} days)`;
                         rowStyle = 'background: rgba(245, 158, 11, 0.2); color: #FCD34D;';
                     }
                 } else {
                     // PREVIOUS CYCLE - check if current cycle is past due
                     if (today > dueDate) {
                         const daysPastDue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
-                        status = `⚠ PAST DUE (${daysPastDue} days)`;
+                        status = `⚠ PAST DUE (past due by ${daysPastDue} days)`;
                         rowStyle = 'background: rgba(220, 38, 38, 0.2); color: #FCA5A5;';
                     } else {
                         const daysUntilDue = Math.floor((dueDate - today) / (1000 * 60 * 60 * 24));
                         if (daysUntilDue <= 30) {
-                            status = `⚠ Due Soon (${daysUntilDue} days)`;
+                            status = `⚠ Due Soon (due in ${daysUntilDue} days)`;
                             rowStyle = 'background: rgba(245, 158, 11, 0.1);';
                         } else {
-                            status = `Upcoming (due ${insp.due})`;
+                            status = `Upcoming (due in ${daysUntilDue} days)`;
                         }
                     }
                 }
@@ -1722,15 +1754,15 @@ function showInspectionsPopup(bridge) {
             else {
                 if (today > dueDate) {
                     const daysPastDue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
-                    status = `⚠ PAST DUE (${daysPastDue} days)`;
+                    status = `⚠ PAST DUE (past due by ${daysPastDue} days)`;
                     rowStyle = 'background: rgba(220, 38, 38, 0.2); color: #FCA5A5;';
                 } else {
                     const daysUntilDue = Math.floor((dueDate - today) / (1000 * 60 * 60 * 24));
                     if (daysUntilDue <= 30) {
-                        status = `⚠ Due Soon (${daysUntilDue} days)`;
+                        status = `⚠ Due Soon (due in ${daysUntilDue} days)`;
                         rowStyle = 'background: rgba(245, 158, 11, 0.1);';
                     } else {
-                        status = `Upcoming (due ${insp.due})`;
+                        status = `Upcoming (due in ${daysUntilDue} days)`;
                     }
                 }
             }
