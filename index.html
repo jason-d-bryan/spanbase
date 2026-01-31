@@ -603,7 +603,7 @@
     </div>
     
     <div class="last-updated">
-        Last updated on January 31, 2026 | Version 6.1.12
+        Last updated on January 31, 2026 | Version 6.1.14
     </div>
     
     <div class="header">
@@ -673,6 +673,7 @@
                 <p class="panel-instructions" style="font-size: 9pt; font-style: italic; color: rgba(255,255,255,0.6); margin-top: -10px; margin-bottom: 20px;">
                     Note: Colors show worst available rating. Bridges without any ratings appear gray.
                 </p>
+                <div style="background: rgba(0, 40, 85, 0.6); padding: 12px; border-radius: 6px; border: 2px solid var(--wvdoh-yellow); margin-bottom: 15px;">
                 <div class="slider-group">
                 <label>Deck</label>
                 <div class="slider-container">
@@ -708,7 +709,9 @@
                     <span class="slider-value" id="value-joints">0%</span>
                 </div>
             </div>
-            <div class="slider-group" style="background: rgba(0, 40, 85, 0.6); padding: 12px; border-radius: 6px; border: 2px solid var(--wvdoh-yellow); margin-top: 10px;">
+            </div>
+            
+            <div class="slider-group" style="background: rgba(0, 40, 85, 0.6); padding: 12px; border-radius: 6px; border: 2px solid var(--wvdoh-yellow);">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <label style="margin: 0;">Calc. Sufficiency</label>
                     <button id="sufficiency-mode-toggle" onclick="toggleSufficiencyMode()" style="padding: 4px 10px; font-size: 8pt; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--wvdoh-yellow); border-radius: 3px; cursor: pointer; color: var(--wvdoh-yellow); font-weight: 600;">≤ Mode</button>
@@ -724,6 +727,11 @@
             <div style="margin-top: 15px; text-align: center;">
                 <button onclick="resetCurrentTab()" style="padding: 8px 20px; font-size: 10pt; background: var(--wvdoh-yellow); border: none; border-radius: 4px; cursor: pointer; font-weight: 600; color: var(--wvdoh-blue);">Reset</button>
             </div>
+            </div>
+            
+            <!-- WVDOT Logo (outside scrollable area, stays at bottom) -->
+            <div style="padding: 15px 10px; text-align: center; flex-shrink: 0;"
+                <img src="wvdot-logo.png" alt="WVDOT Logo" style="width: calc(50% - 20px); max-width: 200px; height: auto; display: block; margin: 0 auto;">
             </div>
         </div>
     </div>
