@@ -241,7 +241,11 @@ function showNameTooltip(e, bridge) {
     const point = map.latLngToContainerPoint(e.latlng);
     const tooltip = L.DomUtil.create('div', 'name-tooltip');
     
-    // Style with callout arrow
+    // Use transform to center - this is more reliable
+    tooltip.style.position = 'absolute';
+    tooltip.style.left = point.x + 'px';
+    tooltip.style.top = (point.y - 45) + 'px'; // 45px above point
+    tooltip.style.transform = 'translateX(-50%)'; // Center horizontally
     tooltip.style.backgroundColor = bridgeColor;
     tooltip.style.color = '#fff';
     tooltip.style.padding = '8px 12px';
@@ -249,32 +253,17 @@ function showNameTooltip(e, bridge) {
     tooltip.style.fontSize = '11pt';
     tooltip.style.fontWeight = '600';
     tooltip.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
-    tooltip.style.position = 'absolute';
     tooltip.style.whiteSpace = 'nowrap';
     tooltip.style.zIndex = '10000';
     tooltip.style.pointerEvents = 'none';
-    tooltip.style.visibility = 'hidden'; // Hide while measuring
-    tooltip.style.left = '0px'; // Start at 0 to measure properly
-    tooltip.style.top = '0px';
     
-    // Add arrow using CSS
-    tooltip.style.setProperty('--arrow-color', bridgeColor);
-    
+    // Arrow pointing down to bridge
     tooltip.innerHTML = `
         ${bridgeName} | ${bars}
-        <div style="position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 8px solid transparent; border-right: 8px solid transparent; border-top: 8px solid var(--arrow-color);"></div>
+        <div style="position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 8px solid transparent; border-right: 8px solid transparent; border-top: 8px solid ${bridgeColor};"></div>
     `;
     
-    // Add to DOM to measure
     document.getElementById('map').appendChild(tooltip);
-    
-    // NOW measure and center properly
-    const tooltipWidth = tooltip.offsetWidth;
-    const tooltipHeight = tooltip.offsetHeight;
-    tooltip.style.left = (point.x - tooltipWidth / 2) + 'px';
-    tooltip.style.top = (point.y - tooltipHeight - 15) + 'px'; // Position above point with 15px gap
-    tooltip.style.visibility = 'visible'; // Show now that it's positioned
-    
     nameTooltip = tooltip;
 }
 
