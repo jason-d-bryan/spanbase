@@ -5,6 +5,7 @@ let sufficiencyData = {}; // BARS number -> calculated sufficiency rating
 let bridgeLayers = {};
 let currentMode = 'default';
 let currentZoom = 8;
+const initialView = { center: [38.45, -80.4549], zoom: 8 }; // For resetting to WV overview
 let hoveredBridge = null;
 let radialMenu = null;
 let nameTooltip = null;
@@ -99,7 +100,7 @@ async function init() {
         sufficiencyData = await suffResponse.json();
         console.log(`✓ Loaded sufficiency data for ${Object.keys(sufficiencyData).length} bridges`);
         
-        map = L.map('map').setView([38.5976, -80.4549], 8);
+        map = L.map('map').setView([38.45, -80.4549], 8); // Moved south from 38.5976 to 38.45
         
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '© OpenStreetMap',
@@ -176,6 +177,11 @@ function addBridges() {
         marker.bridgeData = bridge;
         
         marker.on('mouseover', function(e) {
+            // Don't show tooltip on hidden bridges
+            const options = this.options;
+            if (options.opacity === 0 || options.fillOpacity === 0) {
+                return;
+            }
             if (currentZoom >= 10) {
                 showNameTooltip(e, bridge);
             }
@@ -208,13 +214,55 @@ function showNameTooltip(e, bridge) {
     
     removeNameTooltip();
     
+    // Get bridge color
+    const marker = bridgeLayers[bridge.bars_number];
+    const bridgeColor = marker ? marker.options.fillColor : '#00d9ff';
+    
+    // Convert name to title case
+    const titleCase = (str) => {
+        if (!str) return 'Unknown Bridge';
+        return str.toLowerCase().split(' ').map(word => 
+            word.charAt(0).toUpperCase() + word.slice(1)
+        ).join(' ');
+    };
+    
+    const bridgeName = titleCase(bridge.bridge_name);
+    const bars = bridge.bars_number;
+    
     const point = map.latLngToContainerPoint(e.latlng);
     const tooltip = L.DomUtil.create('div', 'name-tooltip');
-    tooltip.style.left = point.x + 'px';
-    tooltip.style.top = (point.y - 35) + 'px';
-    tooltip.innerHTML = bridge.bridge_name || 'Unknown Bridge';
     
+    // Style with callout arrow
+    tooltip.style.backgroundColor = bridgeColor;
+    tooltip.style.color = '#fff';
+    tooltip.style.padding = '8px 12px';
+    tooltip.style.borderRadius = '6px';
+    tooltip.style.fontSize = '11pt';
+    tooltip.style.fontWeight = '600';
+    tooltip.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+    tooltip.style.position = 'absolute';
+    tooltip.style.whiteSpace = 'nowrap';
+    tooltip.style.zIndex = '10000';
+    tooltip.style.pointerEvents = 'none';
+    tooltip.style.visibility = 'hidden'; // Hide while measuring
+    
+    // Add arrow using CSS
+    tooltip.style.setProperty('--arrow-color', bridgeColor);
+    
+    tooltip.innerHTML = `
+        ${bridgeName} | ${bars}
+        <div style="position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 8px solid transparent; border-right: 8px solid transparent; border-top: 8px solid var(--arrow-color);"></div>
+    `;
+    
+    // Add to DOM to measure
     document.getElementById('map').appendChild(tooltip);
+    
+    // Measure and center
+    const tooltipWidth = tooltip.offsetWidth;
+    tooltip.style.left = (point.x - tooltipWidth / 2) + 'px';
+    tooltip.style.top = (point.y - 55) + 'px';
+    tooltip.style.visibility = 'visible'; // Show now that it's positioned
+    
     nameTooltip = tooltip;
 }
 
@@ -1033,8 +1081,21 @@ function setupSearch() {
     const searchInput = document.getElementById('searchInput');
     
     searchInput.addEventListener('input', (e) => {
-        currentSearchQuery = e.target.value.toUpperCase().trim();
+        const originalValue = e.target.value.toUpperCase();
+        currentSearchQuery = originalValue.trim();
         applySearch();
+        
+        // Auto-zoom to results after 2+ numbers OR after any word ends (space detected)
+        const isNumericSearch = /^\d/.test(currentSearchQuery);
+        const wordCount = originalValue.trim().split(/\s+/).length;
+        const hasSpace = originalValue.includes(' ');
+        
+        const shouldZoom = (isNumericSearch && currentSearchQuery.length >= 2) || 
+                          (!isNumericSearch && hasSpace && currentSearchQuery.length > 0);
+        
+        if (shouldZoom) {
+            zoomToSearchResults();
+        }
     });
     
     // ESC key resets to defaults
@@ -1059,6 +1120,29 @@ function setupSearch() {
             applySearch();
             updateBridgeSizes();
         }
+    });
+}
+
+function zoomToSearchResults() {
+    // Collect all visible bridge coordinates
+    const visibleCoords = [];
+    
+    Object.values(bridgeLayers).forEach(marker => {
+        const options = marker.options;
+        if (options.opacity > 0 && options.fillOpacity > 0) {
+            visibleCoords.push(marker.getLatLng());
+        }
+    });
+    
+    if (visibleCoords.length === 0) return;
+    
+    // Create bounds from visible bridges
+    const bounds = L.latLngBounds(visibleCoords);
+    
+    // Fit map to bounds with padding
+    map.fitBounds(bounds, {
+        padding: [50, 50],
+        maxZoom: 13
     });
 }
 
@@ -1136,19 +1220,52 @@ function updateDebugPanel() {
 
 // District toggle functionality
 function setupDistrictToggles() {
+    // District bounds (calculated from bridge coordinates)
+    const districtBounds = {
+        'District 1': [[37.802, -82.184], [39.013, -80.824]],
+        'District 2': [[37.528, -82.605], [38.586, -81.673]],
+        'District 3': [[38.539, -81.880], [39.460, -80.841]],
+        'District 4': [[39.108, -80.893], [39.720, -79.488]],
+        'District 5': [[38.798, -79.424], [39.693, -77.742]],
+        'District 6': [[39.340, -81.018], [40.621, -80.436]],
+        'District 7': [[38.364, -81.214], [39.294, -79.846]],
+        'District 8': [[38.064, -80.299], [39.237, -79.110]],
+        'District 9': [[37.397, -81.364], [38.522, -80.083]],
+        'District 10': [[37.206, -81.946], [37.969, -80.869]]
+    };
+    
     const legendItems = document.querySelectorAll('.legend-item');
     legendItems.forEach((item, index) => {
         const districtName = `District ${index + 1}`;
         item.addEventListener('click', () => {
-            // Toggle district state
-            activeDistricts[districtName] = !activeDistricts[districtName];
+            const wasActive = activeDistricts[districtName];
             
-            // Update visual state
-            if (activeDistricts[districtName]) {
+            // Turn off ALL districts
+            Object.keys(activeDistricts).forEach(district => {
+                activeDistricts[district] = false;
+            });
+            legendItems.forEach(i => i.classList.add('inactive'));
+            
+            // Turn on ONLY this district (if it was off)
+            if (!wasActive) {
+                activeDistricts[districtName] = true;
                 item.classList.remove('inactive');
+                
+                // Zoom to district bounds
+                const bounds = districtBounds[districtName];
+                if (bounds) {
+                    map.fitBounds(bounds, { padding: [30, 30] });
+                }
             } else {
-                item.classList.add('inactive');
+                // Was active and clicked again - turn all back on
+                Object.keys(activeDistricts).forEach(district => {
+                    activeDistricts[district] = true;
+                });
+                legendItems.forEach(i => i.classList.remove('inactive'));
             }
+            
+            // Update toggle all button state
+            syncToggleAllButton();
             
             // Update bridge visibility
             updateBridgeVisibility();
@@ -1177,6 +1294,9 @@ window.toggleAllDistricts = function() {
         });
         legendItems.forEach(item => item.classList.remove('inactive'));
         toggleBtn.textContent = 'All Off';
+        
+        // Zoom back to WV overview
+        map.setView(initialView.center, initialView.zoom);
     }
     
     // Update bridge visibility
@@ -1192,6 +1312,12 @@ function syncToggleAllButton() {
 }
 
 function updateBridgeVisibility() {
+    // If inspection filters are active, use inspection update logic
+    if (inspectionFiltersActive) {
+        updateBridgesForInspection();
+        return;
+    }
+    
     Object.entries(bridgeLayers).forEach(([bars, marker]) => {
         const bridge = bridgesData.find(b => b.bars_number === bars);
         if (!bridge) return;
@@ -1209,10 +1335,19 @@ function updateBridgeVisibility() {
         }
         
         if (districtActive && searchMatch) {
-            marker.setStyle({ 
-                fillOpacity: evaluationActive ? getEvaluationOpacity(bridge) : 0.85,
-                opacity: 1
-            });
+            if (evaluationActive) {
+                marker.setStyle({ 
+                    fillColor: getEvaluationColor(bridge),
+                    fillOpacity: getEvaluationOpacity(bridge),
+                    opacity: 1
+                });
+            } else {
+                marker.setStyle({ 
+                    fillColor: districtColors[bridge.district],
+                    fillOpacity: 0.85,
+                    opacity: 1
+                });
+            }
         } else {
             marker.setStyle({ 
                 fillOpacity: 0,
