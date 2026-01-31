@@ -244,7 +244,7 @@ function showNameTooltip(e, bridge) {
     // Use transform to center - this is more reliable
     tooltip.style.position = 'absolute';
     tooltip.style.left = point.x + 'px';
-    tooltip.style.top = (point.y - 45) + 'px'; // 45px above point
+    tooltip.style.top = (point.y - 50) + 'px'; // 50px above point
     tooltip.style.transform = 'translateX(-50%)'; // Center horizontally
     tooltip.style.backgroundColor = bridgeColor;
     tooltip.style.color = '#fff';
