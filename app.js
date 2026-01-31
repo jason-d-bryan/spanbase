@@ -254,6 +254,8 @@ function showNameTooltip(e, bridge) {
     tooltip.style.zIndex = '10000';
     tooltip.style.pointerEvents = 'none';
     tooltip.style.visibility = 'hidden'; // Hide while measuring
+    tooltip.style.left = '0px'; // Start at 0 to measure properly
+    tooltip.style.top = '0px';
     
     // Add arrow using CSS
     tooltip.style.setProperty('--arrow-color', bridgeColor);
@@ -266,10 +268,11 @@ function showNameTooltip(e, bridge) {
     // Add to DOM to measure
     document.getElementById('map').appendChild(tooltip);
     
-    // Measure and center
+    // NOW measure and center properly
     const tooltipWidth = tooltip.offsetWidth;
+    const tooltipHeight = tooltip.offsetHeight;
     tooltip.style.left = (point.x - tooltipWidth / 2) + 'px';
-    tooltip.style.top = (point.y - 55) + 'px';
+    tooltip.style.top = (point.y - tooltipHeight - 15) + 'px'; // Position above point with 15px gap
     tooltip.style.visibility = 'visible'; // Show now that it's positioned
     
     nameTooltip = tooltip;
