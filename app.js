@@ -5,7 +5,8 @@ let sufficiencyData = {}; // BARS number -> calculated sufficiency rating
 let bridgeLayers = {};
 let currentMode = 'default';
 let currentZoom = 8;
-const initialView = { center: [38.45, -80.4549], zoom: 8 }; // For resetting to WV overview
+const wvBounds = [[37.206, -82.605], [40.621, -77.742]];
+const initialView = { bounds: wvBounds, padding: [100, 50], maxZoom: 8 }; // For resetting to WV overview
 let hoveredBridge = null;
 let radialMenu = null;
 let nameTooltip = null;
@@ -100,7 +101,15 @@ async function init() {
         sufficiencyData = await suffResponse.json();
         console.log(`✓ Loaded sufficiency data for ${Object.keys(sufficiencyData).length} bridges`);
         
-        map = L.map('map').setView([38.45, -80.4549], 8); // Moved south from 38.5976 to 38.45
+        // Initialize map with WV bounding box
+        map = L.map('map');
+        
+        // West Virginia bounding box from all bridge coordinates
+        const wvBounds = [[37.206, -82.605], [40.621, -77.742]];
+        map.fitBounds(wvBounds, {
+            padding: [100, 50], // Extra top padding for UI
+            maxZoom: 8
+        });
         
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '© OpenStreetMap',
@@ -1238,30 +1247,35 @@ function setupDistrictToggles() {
     legendItems.forEach((item, index) => {
         const districtName = `District ${index + 1}`;
         item.addEventListener('click', () => {
-            const wasActive = activeDistricts[districtName];
+            // Check if ALL districts are currently off (meaning this is the only one on)
+            const onlyThisOneActive = activeDistricts[districtName] && 
+                                     Object.entries(activeDistricts).filter(([k,v]) => v && k !== districtName).length === 0;
             
-            // Turn off ALL districts
-            Object.keys(activeDistricts).forEach(district => {
-                activeDistricts[district] = false;
-            });
-            legendItems.forEach(i => i.classList.add('inactive'));
-            
-            // Turn on ONLY this district (if it was off)
-            if (!wasActive) {
-                activeDistricts[districtName] = true;
-                item.classList.remove('inactive');
-                
-                // Zoom to district bounds
-                const bounds = districtBounds[districtName];
-                if (bounds) {
-                    map.fitBounds(bounds, { padding: [30, 30] });
-                }
-            } else {
-                // Was active and clicked again - turn all back on
+            if (onlyThisOneActive) {
+                // Clicking the only active district - turn all back on and zoom to WV
                 Object.keys(activeDistricts).forEach(district => {
                     activeDistricts[district] = true;
                 });
                 legendItems.forEach(i => i.classList.remove('inactive'));
+                map.fitBounds(initialView.bounds, { padding: initialView.padding, maxZoom: initialView.maxZoom });
+            } else {
+                // Turn off ALL districts except this one
+                Object.keys(activeDistricts).forEach(district => {
+                    activeDistricts[district] = (district === districtName);
+                });
+                legendItems.forEach((i, idx) => {
+                    if (idx + 1 === index + 1) {
+                        i.classList.remove('inactive');
+                    } else {
+                        i.classList.add('inactive');
+                    }
+                });
+                
+                // Zoom to this district
+                const bounds = districtBounds[districtName];
+                if (bounds) {
+                    map.fitBounds(bounds, { padding: [30, 30] });
+                }
             }
             
             // Update toggle all button state
@@ -1296,7 +1310,7 @@ window.toggleAllDistricts = function() {
         toggleBtn.textContent = 'All Off';
         
         // Zoom back to WV overview
-        map.setView(initialView.center, initialView.zoom);
+        map.fitBounds(initialView.bounds, { padding: initialView.padding, maxZoom: initialView.maxZoom });
     }
     
     // Update bridge visibility
