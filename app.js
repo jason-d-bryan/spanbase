@@ -122,14 +122,8 @@ async function init() {
         createEvaluationPanel();
         setupDistrictToggles();
         
-        // Initialize zoom display
-        const zoomDisplay = document.getElementById('zoomDisplay');
-        if (zoomDisplay) zoomDisplay.textContent = currentZoom;
-        
         map.on('zoomend', function() {
             currentZoom = map.getZoom();
-            const zoomDisplay = document.getElementById('zoomDisplay');
-            if (zoomDisplay) zoomDisplay.textContent = currentZoom;
             syncToggleAllButton(); // Keep button text synced
             updateBridgeSizes();
             updateDebugPanel();
@@ -279,10 +273,10 @@ function showRadialMenu(latlng, bridge) {
     
     const point = map.latLngToContainerPoint(latlng);
     
-    // Create title above menu - moved up 225px total
+    // Create title above menu - 10px from center circle (117/2 = 58.5, + 10 = ~70px)
     const title = L.DomUtil.create('div', 'menu-title');
     title.style.left = point.x + 'px';
-    title.style.top = (point.y - 255) + 'px';
+    title.style.top = (point.y - 277) + 'px'; // Moved up 7px more
     
     // Convert bridge name to title case
     const bridgeName = bridge.bridge_name || 'Unknown';
@@ -293,6 +287,12 @@ function showRadialMenu(latlng, bridge) {
             ${titleCaseName}<br>
             <span style="font-size: 12pt;">${bridge.bars_number}</span>
         </div>
+        <div class="menu-title-links">
+            <a href="https://www.google.com/maps?q=${bridge.latitude},${bridge.longitude}" 
+               target="_blank" class="menu-title-link">Google Maps</a>
+            <a href="${bridge.bars_hyperlink || '#'}" 
+               target="_blank" class="menu-title-link">AssetWise</a>
+        </div>
     `;
     document.getElementById('map').appendChild(title);
     
@@ -300,18 +300,11 @@ function showRadialMenu(latlng, bridge) {
     menu.style.left = point.x + 'px';
     menu.style.top = point.y + 'px';
     
-    // Center - clickable links
+    // Center - WVDOT logo (background image)
     const center = L.DomUtil.create('div', 'radial-center', menu);
-    center.innerHTML = `
-        <div class="center-title">
-            <a href="https://www.google.com/maps?q=${bridge.latitude},${bridge.longitude}" 
-               target="_blank" class="center-link">Google</a>
-            <a href="${bridge.bars_hyperlink || '#'}" 
-               target="_blank" class="center-link">AssetWise</a>
-        </div>
-    `;
+    center.innerHTML = ``; // Empty, logo is background
     
-    // 5 nodes evenly spaced around the circle (72° apart)
+    // ORIGINAL 5 nodes layout - keep exactly as screenshot 2
     const nodes = [
         { angle: 270, label: 'Narrative', action: () => showNarratives(bridge) },        // Top (12 o'clock)
         { angle: 342, label: 'Condition', action: () => showCondition(bridge) },         // Top-right
@@ -322,7 +315,7 @@ function showRadialMenu(latlng, bridge) {
     
     nodes.forEach(node => {
         const rad = node.angle * Math.PI / 180;
-        const distance = 110; // Increased distance for better spacing
+        const distance = 105; // Brought in 5px closer
         
         const option = L.DomUtil.create('div', 'radial-option', menu);
         option.style.left = (distance * Math.cos(rad)) + 'px';
@@ -342,8 +335,9 @@ function showRadialMenu(latlng, bridge) {
     // Click outside to close (but not on bridges)
     setTimeout(() => {
         const closeListener = function(e) {
-            // Don't close if clicking on menu, info panel, or another bridge
+            // Don't close if clicking on menu, title, info panel, or another bridge
             if (menu.contains(e.target) || 
+                title.contains(e.target) ||
                 e.target.closest('.info-panel') ||
                 e.target.closest('.leaflet-interactive')) {
                 return;
@@ -1042,30 +1036,14 @@ window.resetMaintenanceTab = function() {
     const toggleBtn = document.getElementById('sufficiency-mode-toggle');
     if (toggleBtn) toggleBtn.textContent = '≤ Mode';
     
-    // Deactivate evaluation mode and return to district colors
-    evaluationActive = false;
-    currentMode = 'default';
+    // KEEP evaluation mode active - apply severity colors (default maintenance theme)
+    evaluationActive = true;
+    currentMode = 'evaluation';
     
-    // Get base size for current zoom
-    const baseSize = getPointSize();
+    // Apply severity colors with default slider values (all 0)
+    updateBridgeSizes();
     
-    // Reset all bridges to district colors AND base size
-    Object.entries(bridgeLayers).forEach(([bars, marker]) => {
-        const bridge = bridgesData.find(b => b.bars_number === bars);
-        if (bridge) {
-            const districtActive = activeDistricts[bridge.district];
-            if (districtActive) {
-                marker.setRadius(baseSize); // Reset size!
-                marker.setStyle({
-                    fillColor: districtColors[bridge.district],
-                    fillOpacity: 0.85,
-                    opacity: 1
-                });
-            }
-        }
-    });
-    
-    console.log('Maintenance tab reset');
+    console.log('Maintenance tab reset to severity colors');
 };
 
 window.toggleSufficiencyMode = function() {
@@ -1402,14 +1380,21 @@ window.switchSection = function(section) {
     // Handle leaving maintenance tab
     if (section !== 'maintenance' && evaluationActive) {
         console.log('Leaving maintenance, resetting sliders...');
-        // Reset sliders
-        Object.keys(sliderValues).forEach(key => {
+        // Reset component sliders (not sufficiency)
+        ['deck', 'superstructure', 'substructure', 'bearings', 'joints'].forEach(key => {
             sliderValues[key] = 0;
             const slider = document.getElementById(`slider-${key}`);
             const valueDisplay = document.getElementById(`value-${key}`);
             if (slider) slider.value = 0;
             if (valueDisplay) valueDisplay.textContent = '0%';
         });
+        // Reset sufficiency to 100 (default "show all")
+        sliderValues.sufficiency = 100;
+        const suffSlider = document.getElementById('slider-sufficiency');
+        const suffDisplay = document.getElementById('value-sufficiency');
+        if (suffSlider) suffSlider.value = 100;
+        if (suffDisplay) suffDisplay.textContent = '100';
+        
         evaluationActive = false;
         currentMode = 'default';
         const statusBar = document.getElementById('statusBar');
@@ -1424,42 +1409,30 @@ window.switchSection = function(section) {
         if (inspectionFiltersActive) {
             resetInspectionView();
         }
-        // Start in default mode (not evaluation until sliders moved)
-        currentMode = 'default';
-        evaluationActive = false;
         
-        // RESET TO DISTRICT COLORS
-        console.log('Resetting to district colors...');
-        Object.entries(bridgeLayers).forEach(([bars, marker]) => {
-            const bridge = bridgesData.find(b => b.bars_number === bars);
-            if (bridge) {
-                const districtActive = activeDistricts[bridge.district];
-                
-                // Check search filter
-                let matchesSearch = true;
-                if (currentSearchQuery.length > 0) {
-                    const barsUpper = (bridge.bars_number || '').toUpperCase();
-                    const nameUpper = (bridge.bridge_name || '').toUpperCase();
-                    const isNumericSearch = /^\d/.test(currentSearchQuery);
-                    const matchesBars = isNumericSearch ? barsUpper.startsWith(currentSearchQuery) : barsUpper.includes(currentSearchQuery);
-                    const matchesName = isNumericSearch ? nameUpper.startsWith(currentSearchQuery) : nameUpper.includes(currentSearchQuery);
-                    matchesSearch = matchesBars || matchesName;
-                }
-                
-                if (districtActive && matchesSearch) {
-                    marker.setStyle({
-                        fillColor: districtColors[bridge.district],
-                        fillOpacity: 0.85,
-                        opacity: 1
-                    });
-                } else {
-                    marker.setStyle({
-                        fillOpacity: 0,
-                        opacity: 0
-                    });
-                }
-            }
+        // ACTIVATE EVALUATION MODE (severity colors) as default
+        currentMode = 'evaluation';
+        evaluationActive = true;
+        
+        // Reset all component sliders to 0 (but evaluation is still active)
+        ['deck', 'superstructure', 'substructure', 'bearings', 'joints'].forEach(key => {
+            sliderValues[key] = 0;
+            const slider = document.getElementById(`slider-${key}`);
+            const valueDisplay = document.getElementById(`value-${key}`);
+            if (slider) slider.value = 0;
+            if (valueDisplay) valueDisplay.textContent = '0%';
         });
+        
+        // Reset sufficiency to 100 (show all)
+        sliderValues.sufficiency = 100;
+        const suffSlider = document.getElementById('slider-sufficiency');
+        const suffDisplay = document.getElementById('value-sufficiency');
+        if (suffSlider) suffSlider.value = 100;
+        if (suffDisplay) suffDisplay.textContent = '100';
+        
+        // Apply maintenance severity theme
+        console.log('Applying maintenance severity theme...');
+        updateBridgeSizes(); // This will apply severity colors
     }
     
     // Update button states
