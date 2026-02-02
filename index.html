@@ -300,11 +300,11 @@
         
         .checkbox-label {
             display: block;
-            margin-bottom: 4px;
+            margin-bottom: 2px;
             font-size: 10pt;
             color: rgba(255, 255, 255, 0.9);
             cursor: pointer;
-            padding: 2px 0;
+            padding: 1px 0;
         }
         .checkbox-label input {
             margin-right: 8px;
@@ -745,7 +745,7 @@
     </div>
     
     <div class="last-updated">
-        Last updated on February 02, 2026 | Version 7.3.0
+        Last updated on February 02, 2026 | Version 7.4.1
     </div>
     
     <div class="header">
@@ -888,6 +888,57 @@
         </div>
         <div class="panel-body">
             <!-- NO INSTRUCTION TEXT -->
+            <!-- ROUTE/SUBROUTE SEARCH -->
+            <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
+                <h4 class="section-title">Route Search</h4>
+                <div style="margin-bottom: 10px;">
+                    <label class="slider-label" style="margin-bottom: 5px; display: block; font-size: 10pt;">Route</label>
+                    <input type="text" id="route-search" placeholder="e.g., 79, I-79, US-19" 
+                           style="width: 100%; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; color: #fff; font-size: 10pt;">
+                </div>
+                <div>
+                    <label class="slider-label" style="margin-bottom: 5px; display: block; font-size: 10pt;">Subroute</label>
+                    <input type="text" id="subroute-search" placeholder="Optional" 
+                           style="width: 100%; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; color: #fff; font-size: 10pt;">
+                </div>
+            </div>
+            
+            <!-- ADT SLIDER - DISABLED PLACEHOLDER -->
+            <div class="disabled-section" style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <h4 class="section-title" style="margin: 0;">ADT</h4>
+                    <button disabled style="padding: 4px 10px; font-size: 8pt; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--wvdoh-yellow); border-radius: 3px; cursor: not-allowed; color: var(--wvdoh-yellow); font-weight: 600; opacity: 0.4;">≤ Mode</button>
+                </div>
+                <input type="range" class="slider" disabled min="0" max="100000" step="1000" value="100000" style="width: 100%;">
+                <div style="display: flex; justify-content: space-between; margin-top: 5px;">
+                    <span style="font-size: 9pt; color: rgba(255,255,255,0.6);">0</span>
+                    <span class="slider-value">100,000</span>
+                    <span style="font-size: 9pt; color: rgba(255,255,255,0.6);">100,000</span>
+                </div>
+            </div>
+            <!-- NHS FILTER -->
+            <div style="background: #003b5c; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
+                <h4 class="section-title" style="margin-bottom: 6px;">National Highway System</h4>
+                <div class="nhs-filter" style="display: flex; gap: 8px; margin: 8px 0; justify-content: center;">
+                    <button class="nhs-btn" id="nhs-yes" onclick="setNhsFilter('yes')" style="flex: 0 0 auto; padding: 6px 16px;">Yes</button>
+                    <button class="nhs-btn" id="nhs-no" onclick="setNhsFilter('no')" style="flex: 0 0 auto; padding: 6px 16px;">No</button>
+                    <button class="nhs-btn active" id="nhs-all" onclick="setNhsFilter('all')" style="flex: 0 0 auto; padding: 6px 16px;">All</button>
+                </div>
+            </div>
+            
+            <!-- AGE SLIDER -->
+            <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <label style="margin: 0; color: #fff; font-size: 10pt; font-weight: 600;">Bridge Age</label>
+                    <button id="age-mode-toggle" onclick="toggleAgeMode()" style="padding: 4px 10px; font-size: 8pt; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--wvdoh-yellow); border-radius: 3px; cursor: pointer; color: var(--wvdoh-yellow); font-weight: 600;">≤ Mode</button>
+                </div>
+                <input type="range" class="slider" id="slider-age" min="0" max="100" step="1" value="100" style="width: 100%;">
+                <div style="display: flex; justify-content: space-between; margin-top: 5px;">
+                    <span style="font-size: 9pt; color: var(--wvdoh-yellow); font-weight: 600;">0</span>
+                    <span id="value-age" style="color: #fff; font-size: 11pt; font-weight: 600;">210 years</span>
+                    <span style="font-size: 9pt; color: var(--wvdoh-yellow); font-weight: 600;">210</span>
+                </div>
+            </div>
             
             <!-- LENGTH SLIDER -->
             <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
@@ -926,32 +977,8 @@
                 <input type="range" class="slider" id="slider-area" min="0" max="403000" step="1000" value="403000" style="width: 100%;">
                 <div style="display: flex; justify-content: space-between; margin-top: 5px;">
                     <span style="font-size: 9pt; color: var(--wvdoh-yellow); font-weight: 600;">0</span>
-                    <span id="value-area" style="color: #fff; font-size: 11pt; font-weight: 600;">403,000 sq ft</span>
+                    <span id="value-area" style="color: #fff; font-size: 11pt; font-weight: 600;">403,000 ft<sup>2</sup></span>
                     <span style="font-size: 9pt; color: var(--wvdoh-yellow); font-weight: 600;">403,000</span>
-                </div>
-            </div>
-            
-            <!-- AGE SLIDER -->
-            <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <label style="margin: 0; color: #fff; font-size: 10pt; font-weight: 600;">Bridge Age</label>
-                    <button id="age-mode-toggle" onclick="toggleAgeMode()" style="padding: 4px 10px; font-size: 8pt; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--wvdoh-yellow); border-radius: 3px; cursor: pointer; color: var(--wvdoh-yellow); font-weight: 600;">≤ Mode</button>
-                </div>
-                <input type="range" class="slider" id="slider-age" min="0" max="100" step="1" value="100" style="width: 100%;">
-                <div style="display: flex; justify-content: space-between; margin-top: 5px;">
-                    <span style="font-size: 9pt; color: var(--wvdoh-yellow); font-weight: 600;">0</span>
-                    <span id="value-age" style="color: #fff; font-size: 11pt; font-weight: 600;">210 years</span>
-                    <span style="font-size: 9pt; color: var(--wvdoh-yellow); font-weight: 600;">210</span>
-                </div>
-            </div>
-            
-            <!-- NHS FILTER -->
-            <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
-                <h4 class="section-title">National Highway System</h4>
-                <div class="nhs-filter" style="display: flex; gap: 8px; margin: 12px 0; justify-content: center;">
-                    <button class="nhs-btn" id="nhs-yes" onclick="setNhsFilter('yes')" style="flex: 0 0 auto; padding: 8px 16px;">Yes</button>
-                    <button class="nhs-btn" id="nhs-no" onclick="setNhsFilter('no')" style="flex: 0 0 auto; padding: 8px 16px;">No</button>
-                    <button class="nhs-btn active" id="nhs-all" onclick="setNhsFilter('all')" style="flex: 0 0 auto; padding: 8px 16px;">All</button>
                 </div>
             </div>
             
@@ -966,11 +993,9 @@
             <!-- ON BRIDGE CHECKBOXES -->
             <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
                 <h4 class="section-title">On Bridge</h4>
-                <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="1"> Highway</label>
-                <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="5"> Highway-Pedestrian</label>
+                <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="1,4,5"> Highway (includes combos)</label>
                 <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="2"> Railroad</label>
                 <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="3"> Pedestrian Only</label>
-                <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="4"> Highway-Railroad</label>
                 <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="6,7,8"> Interchange Structures</label>
                 <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="0"> Other</label>
             </div>
@@ -984,21 +1009,6 @@
                 <label class="checkbox-label"><input type="checkbox" class="under-bridge-cb" value="0,3"> Other</label>
             </div>
             
-            <!-- ROUTE/SUBROUTE SEARCH -->
-            <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
-                <h4 class="section-title">Route Search</h4>
-                <div style="margin-bottom: 10px;">
-                    <label class="slider-label" style="margin-bottom: 5px; display: block; font-size: 10pt;">Route</label>
-                    <input type="text" id="route-search" placeholder="e.g., 79, I-79, US-19" 
-                           style="width: 100%; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; color: #fff; font-size: 10pt;">
-                </div>
-                <div>
-                    <label class="slider-label" style="margin-bottom: 5px; display: block; font-size: 10pt;">Subroute</label>
-                    <input type="text" id="subroute-search" placeholder="Optional" 
-                           style="width: 100%; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; color: #fff; font-size: 10pt;">
-                </div>
-            </div>
-            
             <!-- BRIDGE TYPE - DISABLED PLACEHOLDER -->
             <div class="disabled-section" style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
                 <h4 class="section-title">Bridge Type</h4>
@@ -1009,19 +1019,6 @@
                 <label class="checkbox-label disabled"><input type="checkbox" disabled> ...</label>
             </div>
             
-            <!-- ADT SLIDER - DISABLED PLACEHOLDER -->
-            <div class="disabled-section" style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <h4 class="section-title" style="margin: 0;">ADT</h4>
-                    <button disabled style="padding: 4px 10px; font-size: 8pt; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--wvdoh-yellow); border-radius: 3px; cursor: not-allowed; color: var(--wvdoh-yellow); font-weight: 600; opacity: 0.4;">≤ Mode</button>
-                </div>
-                <input type="range" class="slider" disabled min="0" max="100000" step="1000" value="100000" style="width: 100%;">
-                <div style="display: flex; justify-content: space-between; margin-top: 5px;">
-                    <span style="font-size: 9pt; color: rgba(255,255,255,0.6);">0</span>
-                    <span class="slider-value">100,000</span>
-                    <span style="font-size: 9pt; color: rgba(255,255,255,0.6);">100,000</span>
-                </div>
-            </div>
             
             <!-- SHOW N/A TOGGLE -->
             <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">

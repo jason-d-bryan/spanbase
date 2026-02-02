@@ -1593,8 +1593,13 @@ window.resetCurrentTab = function() {
 
 // ESC key to reset
 document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape' && inspectionFiltersActive) {
-        resetInspectionView();
+    if (e.key === 'Escape') {
+        if (inspectionFiltersActive) {
+            resetInspectionView();
+        }
+        if (attributesFilterState.active) {
+            resetAttributesFilter();
+        }
     }
 });
 
@@ -2172,7 +2177,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (areaSlider) {
         areaSlider.addEventListener('input', function() {
             attributesFilterState.area.value = parseInt(this.value);
-            document.getElementById('value-area').textContent = parseInt(this.value).toLocaleString() + ' sq ft';
+            document.getElementById('value-area').innerHTML = parseInt(this.value).toLocaleString() + ' ft<sup>2</sup>';
             checkDimensionSliders();
             applyAttributesFilter();
         });
