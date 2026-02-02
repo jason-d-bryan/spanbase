@@ -322,7 +322,14 @@ function showRadialMenu(latlng, bridge) {
     
     const menu = L.DomUtil.create('div', 'radial-menu');
     menu.style.left = point.x + 'px';
-    menu.style.top = point.y + 'px';
+    
+    // Calculate title bar bottom position
+    const titleBottom = point.y - 277 + 60; // Title height ~60px
+    const menuRadius = 150; // Menu needs ~150px radius space
+    
+    // Ensure menu is at least below title (add small gap)
+    const safeTop = Math.max(point.y, titleBottom + 10);
+    menu.style.top = safeTop + 'px';
     
     // Center - WVDOT logo (background image)
     const center = L.DomUtil.create('div', 'radial-center', menu);
@@ -2136,6 +2143,12 @@ document.addEventListener('DOMContentLoaded', function() {
             checkDimensionSliders();
             applyAttributesFilter();
         });
+        // Auto-zoom when slider is released
+        lengthSlider.addEventListener('change', function() {
+            if (attributesFilterState.length.value < 4020) {
+                setTimeout(autoZoomToFilteredBridges, 100);
+            }
+        });
     }
     
     const widthSlider = document.getElementById('slider-width');
@@ -2147,6 +2160,12 @@ document.addEventListener('DOMContentLoaded', function() {
             checkDimensionSliders();
             applyAttributesFilter();
         });
+        // Auto-zoom when slider is released
+        widthSlider.addEventListener('change', function() {
+            if (attributesFilterState.width.value < 880) {
+                setTimeout(autoZoomToFilteredBridges, 100);
+            }
+        });
     }
     
     const areaSlider = document.getElementById('slider-area');
@@ -2156,6 +2175,12 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('value-area').textContent = parseInt(this.value).toLocaleString() + ' sq ft';
             checkDimensionSliders();
             applyAttributesFilter();
+        });
+        // Auto-zoom when slider is released
+        areaSlider.addEventListener('change', function() {
+            if (attributesFilterState.area.value < 403000) {
+                setTimeout(autoZoomToFilteredBridges, 100);
+            }
         });
     }
     
@@ -2169,6 +2194,12 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('value-age').textContent = actualValue.toLocaleString() + ' years';
             checkDimensionSliders();
             applyAttributesFilter();
+        });
+        // Auto-zoom when slider is released
+        ageSlider.addEventListener('change', function() {
+            if (attributesFilterState.age.value < 210) {
+                setTimeout(autoZoomToFilteredBridges, 100);
+            }
         });
     }
     
@@ -2215,6 +2246,10 @@ document.addEventListener('DOMContentLoaded', function() {
         routeSearch.addEventListener('input', function() {
             attributesFilterState.route = this.value;
             applyAttributesFilter();
+            // Auto-zoom if route entered
+            if (this.value.length > 0) {
+                setTimeout(autoZoomToFilteredBridges, 100);
+            }
         });
     }
     
@@ -2223,6 +2258,10 @@ document.addEventListener('DOMContentLoaded', function() {
         subrouteSearch.addEventListener('input', function() {
             attributesFilterState.subroute = this.value;
             applyAttributesFilter();
+            // Auto-zoom if subroute entered
+            if (this.value.length > 0) {
+                setTimeout(autoZoomToFilteredBridges, 100);
+            }
         });
     }
     
@@ -2482,5 +2521,35 @@ function checkDimensionSliders() {
             lengthSlider.style.opacity = '1';
             lengthSlider.style.cursor = 'pointer';
         }
+    }
+}
+
+// Auto-zoom to visible bridges after filter
+function autoZoomToFilteredBridges() {
+    let minLat = Infinity, maxLat = -Infinity;
+    let minLng = Infinity, maxLng = -Infinity;
+    let count = 0;
+    
+    Object.values(bridgeLayers).forEach(marker => {
+        // Check if bridge is visible (has opacity > 0)
+        if (marker.options.fillOpacity > 0) {
+            const latlng = marker.getLatLng();
+            if (latlng.lat < minLat) minLat = latlng.lat;
+            if (latlng.lat > maxLat) maxLat = latlng.lat;
+            if (latlng.lng < minLng) minLng = latlng.lng;
+            if (latlng.lng > maxLng) maxLng = latlng.lng;
+            count++;
+        }
+    });
+    
+    if (count > 0) {
+        const bounds = [[minLat, minLng], [maxLat, maxLng]];
+        map.fitBounds(bounds, {
+            padding: [50, 50],
+            maxZoom: 12,
+            animate: true,
+            duration: 0.5
+        });
+        console.log(`Auto-zoomed to ${count} filtered bridges`);
     }
 }
