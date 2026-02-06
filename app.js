@@ -91,7 +91,8 @@ async function init() {
         const decompressed = pako.inflate(new Uint8Array(compressed), { to: 'string' });
         bridgesData = JSON.parse(decompressed);
         console.log(`✓ Loaded ${bridgesData.length} bridges`);
-        
+        buildQuantileTables();
+
         // Load inspection data
         const inspResponse = await fetch('inspections_data.json.gz');
         const inspCompressed = await inspResponse.arrayBuffer();
@@ -1119,9 +1120,11 @@ function updateBridgeSizes() {
         
         // Show or hide marker
         if (shouldShow) {
+            // Override color to grey when NA checkbox isolates this bridge
+            const displayColor = attributesFilterState.showNA ? '#6b7280' : color;
             marker.setRadius(size);
             marker.setStyle({
-                fillColor: color,
+                fillColor: displayColor,
                 fillOpacity: 0.85,
                 opacity: 1
             });
@@ -1921,6 +1924,10 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         closeAllMenus();
 
+        // Dismiss route disambiguation popup
+        const routePopup = document.getElementById('routeDisambig');
+        if (routePopup) routePopup.remove();
+
         // Turn off HUB Data toggle if active
         if (projectRingsVisible) {
             projectRingsVisible = false;
@@ -1942,6 +1949,13 @@ document.addEventListener('keydown', function(e) {
             countCategoryState.na = false;
             countCategoryState.hubdata = false;
             countCategoryState.total = true;
+        }
+
+        // Clear showNA state before tab reset so the first updateBridgeSizes pass is clean
+        if (attributesFilterState.showNA) {
+            attributesFilterState.showNA = false;
+            const naCheckbox = document.getElementById('show-na-bridges');
+            if (naCheckbox) naCheckbox.checked = false;
         }
 
         resetCurrentTab();
@@ -2413,6 +2427,7 @@ const attributesFilterState = {
     onBridge: [],
     underBridge: [],
     route: '',
+    routeType: 'all',  // 'all', 'interstate', 'local'
     subroute: '',
     showNA: false  // Don't show N/A bridges by default
 };
@@ -2471,7 +2486,7 @@ window.resetAttributesFilter = function() {
     document.getElementById('width-mode-toggle').textContent = '≤ Mode';
 
     document.getElementById('slider-area').value = 100;
-    document.getElementById('value-area').textContent = '403,000';
+    document.getElementById('value-area').innerHTML = '403,000 ft<sup>2</sup>';
     document.getElementById('area-mode-toggle').textContent = '≤ Mode';
 
     document.getElementById('slider-age').value = 100;
@@ -2491,8 +2506,13 @@ window.resetAttributesFilter = function() {
     attributesFilterState.onBridge = [];
     attributesFilterState.underBridge = [];
     attributesFilterState.route = '';
+    attributesFilterState.routeType = 'all';
     attributesFilterState.subroute = '';
+    attributesFilterState.showNA = false;
     attributesFilterState.active = false;
+
+    const naCheckbox = document.getElementById('show-na-bridges');
+    if (naCheckbox) naCheckbox.checked = false;
     
     // Close count report
     closeCountReport();
@@ -2505,7 +2525,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const lengthSlider = document.getElementById('slider-length');
     if (lengthSlider) {
         lengthSlider.addEventListener('input', function() {
-            const actualValue = sliderToValue(parseInt(this.value), 0, 4020);
+            const actualValue = sliderToValue(parseInt(this.value), 0, 4020, 'length');
             attributesFilterState.length.value = actualValue;
             document.getElementById('value-length').textContent = actualValue.toLocaleString() + ' ft';
             checkDimensionSliders();
@@ -2522,7 +2542,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const widthSlider = document.getElementById('slider-width');
     if (widthSlider) {
         widthSlider.addEventListener('input', function() {
-            const actualValue = sliderToValue(parseInt(this.value), 0, 880);
+            const actualValue = sliderToValue(parseInt(this.value), 0, 880, 'width');
             attributesFilterState.width.value = actualValue;
             document.getElementById('value-width').textContent = actualValue.toLocaleString() + ' ft';
             checkDimensionSliders();
@@ -2539,7 +2559,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const areaSlider = document.getElementById('slider-area');
     if (areaSlider) {
         areaSlider.addEventListener('input', function() {
-            const actualValue = sliderToValue(parseInt(this.value), 0, 403000);
+            const actualValue = sliderToValue(parseInt(this.value), 0, 403000, 'area');
             attributesFilterState.area.value = actualValue;
             document.getElementById('value-area').innerHTML = actualValue.toLocaleString() + ' ft<sup>2</sup>';
             checkDimensionSliders();
@@ -2556,7 +2576,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const ageSlider = document.getElementById('slider-age');
     if (ageSlider) {
         ageSlider.addEventListener('input', function() {
-            const rawValue = sliderToValue(parseInt(this.value), 0, 210);
+            const rawValue = sliderToValue(parseInt(this.value), 0, 210, 'age');
             // Round to nearest 5 years
             const actualValue = Math.round(rawValue / 5) * 5;
             attributesFilterState.age.value = actualValue;
@@ -2611,12 +2631,22 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     const routeSearch = document.getElementById('route-search');
+    const interstateRoutes = ['64', '77', '79'];
     if (routeSearch) {
         routeSearch.addEventListener('input', function() {
-            attributesFilterState.route = this.value;
+            const val = this.value.trim();
+            attributesFilterState.routeType = 'all';
+            dismissRoutePopup();
+
+            // Check if typed value matches an interstate route number
+            if (interstateRoutes.includes(val)) {
+                showRoutePopup(val, this);
+                return; // don't filter yet — wait for popup choice
+            }
+
+            attributesFilterState.route = val;
             applyAttributesFilter();
-            // Auto-zoom if route entered
-            if (this.value.length > 0) {
+            if (val.length > 0) {
                 setTimeout(autoZoomToFilteredBridges, 100);
             }
         });
@@ -2634,6 +2664,62 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
+    // --- Interstate / Local Route Popup ---
+    function showRoutePopup(routeNum, inputEl) {
+        dismissRoutePopup();
+        const popup = document.createElement('div');
+        popup.id = 'routeDisambig';
+        popup.style.cssText = 'position: absolute; z-index: 10000; background: #003b5c; border: 2px solid var(--wvdoh-yellow); border-radius: 6px; padding: 10px 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 8px; min-width: 180px;';
+
+        const label = document.createElement('div');
+        label.style.cssText = 'color: rgba(255,255,255,0.6); font-size: 9pt; text-align: center; font-style: italic;';
+        label.textContent = 'Which route ' + routeNum + '?';
+        popup.appendChild(label);
+
+        const btnInterstate = document.createElement('button');
+        btnInterstate.style.cssText = 'padding: 8px 12px; background: var(--wvdoh-yellow); color: var(--wvdoh-blue); border: none; border-radius: 4px; cursor: pointer; font-weight: 700; font-size: 10pt;';
+        btnInterstate.textContent = 'Interstate ' + routeNum;
+        btnInterstate.addEventListener('click', function() {
+            attributesFilterState.route = routeNum;
+            attributesFilterState.routeType = 'interstate';
+            dismissRoutePopup();
+            applyAttributesFilter();
+            setTimeout(autoZoomToFilteredBridges, 100);
+        });
+        popup.appendChild(btnInterstate);
+
+        const btnLocal = document.createElement('button');
+        btnLocal.style.cssText = 'padding: 8px 12px; background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.3); border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 10pt;';
+        btnLocal.textContent = 'Local Route ' + routeNum;
+        btnLocal.addEventListener('click', function() {
+            attributesFilterState.route = routeNum;
+            attributesFilterState.routeType = 'local';
+            dismissRoutePopup();
+            applyAttributesFilter();
+            setTimeout(autoZoomToFilteredBridges, 100);
+        });
+        popup.appendChild(btnLocal);
+
+        // Position below the input
+        const rect = inputEl.getBoundingClientRect();
+        popup.style.top = (rect.bottom + 4) + 'px';
+        popup.style.left = rect.left + 'px';
+        document.body.appendChild(popup);
+    }
+
+    function dismissRoutePopup() {
+        const existing = document.getElementById('routeDisambig');
+        if (existing) existing.remove();
+    }
+
+    // Dismiss popup on outside click
+    document.addEventListener('click', function(e) {
+        const popup = document.getElementById('routeDisambig');
+        if (popup && !popup.contains(e.target) && e.target.id !== 'route-search') {
+            dismissRoutePopup();
+        }
+    });
+
     // Show N/A bridges toggle
     const showNACheckbox = document.getElementById('show-na-bridges');
     if (showNACheckbox) {
@@ -2647,7 +2733,8 @@ document.addEventListener('DOMContentLoaded', function() {
 // Apply attributes filter and update bridge visibility
 function applyAttributesFilter() {
     // Check if any filter is active
-    const isActive = 
+    const isActive =
+        attributesFilterState.showNA ||
         attributesFilterState.length.value < 4020 ||
         attributesFilterState.width.value < 880 ||
         attributesFilterState.area.value < 403000 ||
@@ -2716,9 +2803,44 @@ function applyAttributesFilter() {
 function bridgePassesAttributesFilter(bridge) {
     if (!attributesFilterState.active) return true;
     
-    // Hide N/A bridges unless toggle is on
-    if (!attributesFilterState.showNA) {
-        // Check if any active filter has N/A data
+    // NA mode: when showNA is checked, ONLY show bridges with N/A data
+    // When showNA is unchecked, hide bridges with N/A data for active dimensions
+    if (attributesFilterState.showNA) {
+        // Exclusive NA mode — bridge must have N/A in at least one dimension
+        // If sliders are moved, check only active dimensions; otherwise check all four
+        const lengthActive = attributesFilterState.length.value < 4020;
+        const widthActive = attributesFilterState.width.value < 880;
+        const areaActive = attributesFilterState.area.value < 403000;
+        const ageActive = attributesFilterState.age.value < 210;
+        const anySliderActive = lengthActive || widthActive || areaActive || ageActive;
+
+        let hasNA = false;
+        const checkLength = anySliderActive ? lengthActive : true;
+        const checkWidth = anySliderActive ? widthActive : true;
+        const checkArea = anySliderActive ? areaActive : true;
+        const checkAge = anySliderActive ? ageActive : true;
+
+        if (checkLength) {
+            const length = parseFloat(bridge.bridge_length);
+            if (isNaN(length) || length === 0) hasNA = true;
+        }
+        if (checkWidth) {
+            const width = parseFloat(bridge.width_out_to_out);
+            if (isNaN(width) || width === 0) hasNA = true;
+        }
+        if (checkArea) {
+            const area = parseFloat(bridge.bridge_area);
+            if (isNaN(area) || area === 0) hasNA = true;
+        }
+        if (checkAge) {
+            const age = parseInt(bridge.bridge_age);
+            if (isNaN(age) || age === 0) hasNA = true;
+        }
+        if (!hasNA) return false;
+        // When showNA is the only active filter (no sliders moved), skip dimension filters below
+        if (!anySliderActive) return true;
+    } else {
+        // Normal mode — hide bridges with N/A data for active dimensions
         if (attributesFilterState.length.value < 4020) {
             const length = parseFloat(bridge.bridge_length);
             if (isNaN(length) || length === 0) return false;
@@ -2790,10 +2912,20 @@ function bridgePassesAttributesFilter(bridge) {
         if (!matches) return false;
     }
     
-    // Route filter
+    // Route filter — exact match after stripping leading zeros
     if (attributesFilterState.route.length > 0) {
-        const route = (bridge.route || '').toString().toUpperCase();
-        if (!route.includes(attributesFilterState.route.toUpperCase())) return false;
+        const bridgeRoute = (bridge.route || '').toString().replace(/^0+/, '') || '0';
+        const searchRoute = attributesFilterState.route.replace(/^0+/, '') || '0';
+        if (bridgeRoute !== searchRoute) return false;
+
+        // Interstate vs Local disambiguation
+        if (attributesFilterState.routeType === 'interstate') {
+            const fc = (bridge.functional_class || '').toLowerCase();
+            if (!fc.includes('interstate')) return false;
+        } else if (attributesFilterState.routeType === 'local') {
+            const fc = (bridge.functional_class || '').toLowerCase();
+            if (fc.includes('interstate')) return false;
+        }
     }
     
     // Subroute filter
@@ -2805,17 +2937,68 @@ function bridgePassesAttributesFilter(bridge) {
     return true;
 }
 
-// Logarithmic slider conversion for better distribution
-// Power-curve scaling (quadratic) — more natural than logarithmic
-function valueToSlider(value, min, max) {
+// Quantile-based slider scaling — each 1% of slider = ~1% of bridge population
+// Built from actual data distribution after bridgesData loads
+const quantileTables = {};
+
+function buildQuantileTables() {
+    const fields = {
+        length: { getter: b => parseFloat(b.bridge_length) || 0, max: 4020 },
+        width:  { getter: b => parseFloat(b.width_out_to_out) || 0, max: 880 },
+        area:   { getter: b => parseFloat(b.bridge_area) || 0, max: 403000 },
+        age:    { getter: b => parseInt(b.bridge_age) || 0, max: 210 }
+    };
+
+    Object.entries(fields).forEach(([key, cfg]) => {
+        const values = bridgesData.map(cfg.getter).filter(v => v > 0).sort((a, b) => a - b);
+        // Build 101-point table (positions 0-100)
+        const table = new Array(101);
+        table[0] = 0;
+        for (let i = 1; i <= 99; i++) {
+            const idx = Math.min(Math.round((i / 100) * (values.length - 1)), values.length - 1);
+            table[i] = values[idx];
+        }
+        // Position 100 = hardcoded max (so filter "active" checks work)
+        table[100] = cfg.max;
+        quantileTables[key] = table;
+    });
+
+    console.log('✓ Built quantile tables for slider normalization');
+}
+
+function sliderToValue(position, min, max, field) {
+    if (field && quantileTables[field]) {
+        const pos = Math.max(0, Math.min(100, Math.round(position)));
+        return quantileTables[field][pos];
+    }
+    // Fallback: quadratic
+    const range = max - min;
+    return Math.round(Math.pow(position / 100, 2) * range + min);
+}
+
+function valueToSlider(value, min, max, field) {
+    if (field && quantileTables[field]) {
+        const table = quantileTables[field];
+        // Binary search for closest position
+        if (value <= table[0]) return 0;
+        if (value >= table[100]) return 100;
+        let lo = 0, hi = 100;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (table[mid] < value) lo = mid + 1;
+            else hi = mid;
+        }
+        // Interpolate between lo-1 and lo for smoother mapping
+        if (lo > 0 && table[lo] !== table[lo - 1]) {
+            const frac = (value - table[lo - 1]) / (table[lo] - table[lo - 1]);
+            return Math.round(lo - 1 + frac);
+        }
+        return lo;
+    }
+    // Fallback: quadratic
     const range = max - min;
     if (range === 0) return 0;
     return Math.round(Math.pow((value - min) / range, 1 / 2) * 100);
-}
-
-function sliderToValue(position, min, max) {
-    const range = max - min;
-    return Math.round(Math.pow(position / 100, 2) * range + min);
 }
 
 // Handle Length/Width/Area mutual exclusivity
@@ -2839,7 +3022,7 @@ function checkDimensionSliders() {
         // Reset area to max
         if (areaActive) {
             attributesFilterState.area.value = 403000;
-            document.getElementById('value-area').textContent = '403,000 sq ft';
+            document.getElementById('value-area').innerHTML = '403,000 ft<sup>2</sup>';
             areaSlider.value = areaSlider.max;
         }
     } else {
@@ -2927,8 +3110,80 @@ function autoZoomToFilteredBridges() {
 }
 
 // ============================================
-// COUNT REPORT SYSTEM (v7.6.5 - Show Max Counts)
+// COUNT REPORT SYSTEM (v7.6.5 - Dynamic Buttons)
 // ============================================
+
+// Track which CR button set is currently rendered: 'default' or 'full'
+let crButtonMode = null;
+
+// Build CR buttons dynamically based on active filter context
+// 'default' = HUB Data, N/A, Total (no condition sliders engaged)
+// 'full' = Critical, Emergent, Satisfactory, N/A, HUB Data, Total (condition sliders engaged)
+function buildCountReportButtons(mode) {
+    if (mode === crButtonMode) return; // already in correct mode
+    crButtonMode = mode;
+
+    const body = document.getElementById('countReportBody');
+    if (!body) return;
+
+    const btnStyle = 'display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 8px 10px; margin-bottom: 4px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; transition: all 0.2s;';
+    const dotStyle = 'width: 12px; height: 12px; border-radius: 50%; border: 1px solid #fff;';
+    const labelStyle = 'color: #fff; font-weight: 600; font-size: 10pt;';
+    const countStyle = 'color: #fff; font-size: 14pt; font-weight: 700;';
+
+    let html = '<div style="font-size: 9pt; color: rgba(255,255,255,0.5); margin-bottom: 6px; text-align: center; font-style: italic;">Click to isolate</div>';
+
+    if (mode === 'full') {
+        html += `<button id="btn-critical" onclick="toggleCountCategory('critical')" style="${btnStyle}">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="${dotStyle} background: #dc2626;"></div>
+                <span style="${labelStyle}">Critical</span>
+            </div>
+            <span style="${countStyle}" id="count-critical">0</span>
+        </button>`;
+        html += `<button id="btn-emergent" onclick="toggleCountCategory('emergent')" style="${btnStyle}">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="${dotStyle} background: #F97316;"></div>
+                <span style="${labelStyle}">Emergent</span>
+            </div>
+            <span style="${countStyle}" id="count-emergent">0</span>
+        </button>`;
+        html += `<button id="btn-satisfactory" onclick="toggleCountCategory('satisfactory')" style="${btnStyle}">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="${dotStyle} background: #10b981;"></div>
+                <span style="${labelStyle}">Satisfactory</span>
+            </div>
+            <span style="${countStyle}" id="count-satisfactory">0</span>
+        </button>`;
+    }
+
+    // N/A — always present
+    html += `<button id="btn-na" onclick="toggleCountCategory('na')" style="${btnStyle}">
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="${dotStyle} background: #6b7280;"></div>
+            <span style="${labelStyle}">N/A</span>
+        </div>
+        <span style="${countStyle}" id="count-na">0</span>
+    </button>`;
+
+    // HUB Data — always present (extra bottom margin before Total)
+    html += `<button id="btn-hubdata" onclick="toggleCountCategory('hubdata')" style="${btnStyle} margin-bottom: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="${dotStyle} background: #22c55e;"></div>
+            <span style="${labelStyle}">HUB Data</span>
+        </div>
+        <span style="${countStyle}" id="count-hubdata">0</span>
+    </button>`;
+
+    // Total — always present
+    html += `<button id="btn-total" onclick="toggleCountCategory('total')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 10px 12px; background: rgba(255,184,28,0.1); border: 2px solid var(--wvdoh-yellow); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
+        <span style="color: var(--wvdoh-yellow); font-weight: 700; font-size: 11pt; text-transform: uppercase; letter-spacing: 1px;">TOTAL</span>
+        <span style="color: var(--wvdoh-yellow); font-size: 16pt; font-weight: 700;" id="count-total">0</span>
+    </button>`;
+
+    body.innerHTML = html;
+    console.log('CR buttons rebuilt:', mode);
+}
 
 // Track which categories are active (ALL on by default except N/A)
 const countCategoryState = {
@@ -3076,14 +3331,25 @@ function hasConditionSlidersActive() {
 // Update count report display
 function updateCountReport() {
     const hasCondition = hasConditionSlidersActive();
-    
+    const hasAttributes = typeof attributesFilterState !== 'undefined' && attributesFilterState.active;
+
+    // Determine which button set we need
+    const needFull = hasCondition || inspectionFiltersActive || hasAttributes;
+    const targetMode = needFull ? 'full' : 'default';
+
+    // Build/rebuild buttons if mode changed
+    buildCountReportButtons(targetMode);
+
     // Calculate max counts (from ALL bridges)
     maxCounts = calculateMaxBridgeCounts();
-    
-    // Always display MAX counts
-    document.getElementById('count-critical').textContent = maxCounts.critical;
-    document.getElementById('count-emergent').textContent = maxCounts.emergent;
-    document.getElementById('count-satisfactory').textContent = maxCounts.satisfactory;
+
+    // Update counts — guard elements that may not exist in default mode
+    const elCritical = document.getElementById('count-critical');
+    const elEmergent = document.getElementById('count-emergent');
+    const elSatisfactory = document.getElementById('count-satisfactory');
+    if (elCritical) elCritical.textContent = maxCounts.critical;
+    if (elEmergent) elEmergent.textContent = maxCounts.emergent;
+    if (elSatisfactory) elSatisfactory.textContent = maxCounts.satisfactory;
     document.getElementById('count-na').textContent = maxCounts.na;
     document.getElementById('count-hubdata').textContent = maxCounts.hubdata;
     document.getElementById('count-total').textContent = maxCounts.total;
@@ -3094,25 +3360,8 @@ function updateCountReport() {
     const btnNA = document.getElementById('btn-na');
     const btnHubdata = document.getElementById('btn-hubdata');
 
-    if (!hasCondition && !evaluationActive && !(typeof attributesFilterState !== 'undefined' && attributesFilterState.active)) {
-        // Grey out condition buttons when no condition filtering and not in maintenance mode
-        btnCritical.style.opacity = '0.3';
-        btnCritical.style.cursor = 'not-allowed';
-        btnCritical.disabled = true;
-
-        btnEmergent.style.opacity = '0.3';
-        btnEmergent.style.cursor = 'not-allowed';
-        btnEmergent.disabled = true;
-
-        btnSatisfactory.style.opacity = '0.3';
-        btnSatisfactory.style.cursor = 'not-allowed';
-        btnSatisfactory.disabled = true;
-
-        btnNA.style.opacity = '0.3';
-        btnNA.style.cursor = 'not-allowed';
-        btnNA.disabled = true;
-    } else {
-        // Enable buttons that have bridges
+    // Condition buttons — only exist in 'full' mode
+    if (btnCritical) {
         if (maxCounts.critical > 0) {
             btnCritical.disabled = false;
             btnCritical.style.cursor = 'pointer';
@@ -3123,7 +3372,8 @@ function updateCountReport() {
             btnCritical.style.cursor = 'not-allowed';
             btnCritical.disabled = true;
         }
-
+    }
+    if (btnEmergent) {
         if (maxCounts.emergent > 0) {
             btnEmergent.disabled = false;
             btnEmergent.style.cursor = 'pointer';
@@ -3134,7 +3384,8 @@ function updateCountReport() {
             btnEmergent.style.cursor = 'not-allowed';
             btnEmergent.disabled = true;
         }
-
+    }
+    if (btnSatisfactory) {
         if (maxCounts.satisfactory > 0) {
             btnSatisfactory.disabled = false;
             btnSatisfactory.style.cursor = 'pointer';
@@ -3145,7 +3396,10 @@ function updateCountReport() {
             btnSatisfactory.style.cursor = 'not-allowed';
             btnSatisfactory.disabled = true;
         }
+    }
 
+    // N/A button — always present
+    if (btnNA) {
         if (maxCounts.na > 0) {
             btnNA.disabled = false;
             btnNA.style.cursor = 'pointer';
@@ -3158,7 +3412,7 @@ function updateCountReport() {
         }
     }
 
-    // HUB Data button — always enabled when CR is visible and has project data
+    // HUB Data button — always present
     if (btnHubdata) {
         if (maxCounts.hubdata > 0) {
             btnHubdata.disabled = false;
@@ -3171,7 +3425,7 @@ function updateCountReport() {
             btnHubdata.disabled = true;
         }
     }
-    
+
     // Total button always available
     const btnTotal = document.getElementById('btn-total');
     if (btnTotal) {
@@ -3180,14 +3434,13 @@ function updateCountReport() {
         btnTotal.title = 'Show all bridges (except N/A)';
         btnTotal.style.opacity = '1';
     }
-    
+
     // Update button border styles
     updateButtonStyles();
-    
+
     // Show box only when a filter is actually active (sliders moved, not just evaluation mode)
     const countReport = document.getElementById('countReport');
-    const filtersEngaged = hasCondition || inspectionFiltersActive ||
-                           (typeof attributesFilterState !== 'undefined' && attributesFilterState.active);
+    const filtersEngaged = hasCondition || inspectionFiltersActive || hasAttributes;
     if (filtersEngaged && maxCounts.total > 0 && countReport.style.display !== 'block') {
         countReport.style.display = 'block';
         const header = document.getElementById('countReportHeader');
@@ -3278,39 +3531,23 @@ function positionCountReportOutsideBridges() {
 
 // Update button visual states
 function updateButtonStyles() {
-    const btnCritical = document.getElementById('btn-critical');
-    const btnEmergent = document.getElementById('btn-emergent');
-    const btnSatisfactory = document.getElementById('btn-satisfactory');
-    const btnNA = document.getElementById('btn-na');
-    const btnHubdata = document.getElementById('btn-hubdata');
+    const buttons = [
+        { id: 'btn-critical',     key: 'critical',     color: '#dc2626' },
+        { id: 'btn-emergent',     key: 'emergent',     color: '#F97316' },
+        { id: 'btn-satisfactory', key: 'satisfactory', color: '#10b981' },
+        { id: 'btn-na',           key: 'na',           color: '#6b7280' },
+        { id: 'btn-hubdata',      key: 'hubdata',      color: '#22c55e' }
+    ];
+
+    buttons.forEach(({ id, key, color }) => {
+        const btn = document.getElementById(id);
+        if (btn && !btn.disabled) {
+            btn.style.borderColor = countCategoryState[key] ? color : 'rgba(255,255,255,0.2)';
+            btn.style.borderWidth = countCategoryState[key] ? '2px' : '1px';
+        }
+    });
+
     const btnTotal = document.getElementById('btn-total');
-
-    // Active buttons get highlighted border
-    if (btnCritical && !btnCritical.disabled) {
-        btnCritical.style.borderColor = countCategoryState.critical ? '#dc2626' : 'rgba(255,255,255,0.2)';
-        btnCritical.style.borderWidth = countCategoryState.critical ? '2px' : '1px';
-    }
-
-    if (btnEmergent && !btnEmergent.disabled) {
-        btnEmergent.style.borderColor = countCategoryState.emergent ? '#F97316' : 'rgba(255,255,255,0.2)';
-        btnEmergent.style.borderWidth = countCategoryState.emergent ? '2px' : '1px';
-    }
-
-    if (btnSatisfactory && !btnSatisfactory.disabled) {
-        btnSatisfactory.style.borderColor = countCategoryState.satisfactory ? '#10b981' : 'rgba(255,255,255,0.2)';
-        btnSatisfactory.style.borderWidth = countCategoryState.satisfactory ? '2px' : '1px';
-    }
-
-    if (btnNA && !btnNA.disabled) {
-        btnNA.style.borderColor = countCategoryState.na ? '#6b7280' : 'rgba(255,255,255,0.2)';
-        btnNA.style.borderWidth = countCategoryState.na ? '2px' : '1px';
-    }
-
-    if (btnHubdata && !btnHubdata.disabled) {
-        btnHubdata.style.borderColor = countCategoryState.hubdata ? '#22c55e' : 'rgba(255,255,255,0.2)';
-        btnHubdata.style.borderWidth = countCategoryState.hubdata ? '2px' : '1px';
-    }
-
     if (btnTotal) {
         btnTotal.style.background = countCategoryState.total ? 'rgba(255,184,28,0.1)' : 'transparent';
     }
@@ -3319,8 +3556,8 @@ function updateButtonStyles() {
 // Toggle category visibility
 window.toggleCountCategory = function(category) {
     const hasCondition = hasConditionSlidersActive();
-    // HUB Data button bypasses the condition slider requirement
-    if (category !== 'hubdata' && category !== 'total') {
+    // HUB Data, N/A, and Total buttons always accessible; condition buttons require sliders
+    if (category !== 'hubdata' && category !== 'na' && category !== 'total') {
         if (!hasCondition && !evaluationActive && !(typeof attributesFilterState !== 'undefined' && attributesFilterState.active)) return;
     }
 
@@ -3445,9 +3682,14 @@ function applyCountCategoryFilter() {
     }
 
     const hasCondition = hasConditionSlidersActive();
+    const hasAttributes = typeof attributesFilterState !== 'undefined' && attributesFilterState.active;
 
-    // Apply category filtering when condition sliders active OR in maintenance mode
-    if (!hasCondition && !evaluationActive && !(typeof attributesFilterState !== 'undefined' && attributesFilterState.active)) return;
+    // Check if a specific category is isolated via CR (NA or condition category)
+    const hasIsolation = countCategoryState.na ||
+        (!countCategoryState.critical || !countCategoryState.emergent || !countCategoryState.satisfactory);
+
+    // Apply category filtering when condition sliders active, in maintenance mode, attributes filter, or CR isolation
+    if (!hasCondition && !evaluationActive && !hasAttributes && !hasIsolation) return;
 
     // Check if showing all (total state or all categories on except N/A)
     const showingAll = countCategoryState.total ||
@@ -3522,6 +3764,7 @@ function applyCountCategoryFilter() {
 // Close count report
 window.closeCountReport = function() {
     document.getElementById('countReport').style.display = 'none';
+    crButtonMode = null; // force rebuild on next open
 };
 
 // ========================================

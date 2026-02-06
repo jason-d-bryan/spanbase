@@ -1051,10 +1051,10 @@
             <!-- ON BRIDGE CHECKBOXES -->
             <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
                 <h4 class="section-title">On Bridge</h4>
-                <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="1,4,5"> Highway (includes combos)</label>
+                <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="1,4,5"> Highway</label>
                 <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="2"> Railroad</label>
-                <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="3"> Pedestrian Only</label>
-                <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="6,7,8"> Interchange Structures</label>
+                <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="3,5"> Pedestrian</label>
+                <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="6,7,8"> Interchange</label>
                 <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="0"> Other</label>
             </div>
             
@@ -1062,8 +1062,8 @@
             <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
                 <h4 class="section-title">Under Bridge</h4>
                 <label class="checkbox-label"><input type="checkbox" class="under-bridge-cb" value="5"> Waterway</label>
-                <label class="checkbox-label"><input type="checkbox" class="under-bridge-cb" value="1,4,6,8"> Highway (includes combos)</label>
-                <label class="checkbox-label"><input type="checkbox" class="under-bridge-cb" value="2,7"> Railroad (includes combos)</label>
+                <label class="checkbox-label"><input type="checkbox" class="under-bridge-cb" value="1,4,6,8"> Highway</label>
+                <label class="checkbox-label"><input type="checkbox" class="under-bridge-cb" value="2,7"> Railroad</label>
                 <label class="checkbox-label"><input type="checkbox" class="under-bridge-cb" value="0,3"> Other</label>
             </div>
             
@@ -1120,52 +1120,8 @@
             <h4 style="margin: 0; color: var(--wvdoh-yellow); font-size: 11pt; text-transform: uppercase; letter-spacing: 1px; font-weight: 700;">Count Report</h4>
             <button onclick="closeCountReport()" style="background: transparent; color: #fff; border: none; cursor: pointer; font-weight: 700; font-size: 18pt; padding: 0; line-height: 1;">✕</button>
         </div>
-        <div style="padding: 10px 12px; border-radius: 0 0 6px 6px;">
-            <div style="font-size: 9pt; color: rgba(255,255,255,0.5); margin-bottom: 6px; text-align: center; font-style: italic;">Click to isolate</div>
-            <button id="btn-critical" onclick="toggleCountCategory('critical')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 8px 10px; margin-bottom: 4px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <div style="width: 12px; height: 12px; border-radius: 50%; background: #dc2626; border: 1px solid #fff;"></div>
-                    <span style="color: #fff; font-weight: 600; font-size: 10pt;">Critical</span>
-                </div>
-                <span style="color: #fff; font-size: 14pt; font-weight: 700;" id="count-critical">0</span>
-            </button>
-            
-            <button id="btn-emergent" onclick="toggleCountCategory('emergent')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 8px 10px; margin-bottom: 4px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <div style="width: 12px; height: 12px; border-radius: 50%; background: #F97316; border: 1px solid #fff;"></div>
-                    <span style="color: #fff; font-weight: 600; font-size: 10pt;">Emergent</span>
-                </div>
-                <span style="color: #fff; font-size: 14pt; font-weight: 700;" id="count-emergent">0</span>
-            </button>
-            
-            <button id="btn-satisfactory" onclick="toggleCountCategory('satisfactory')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 8px 10px; margin-bottom: 4px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <div style="width: 12px; height: 12px; border-radius: 50%; background: #10b981; border: 1px solid #fff;"></div>
-                    <span style="color: #fff; font-weight: 600; font-size: 10pt;">Satisfactory</span>
-                </div>
-                <span style="color: #fff; font-size: 14pt; font-weight: 700;" id="count-satisfactory">0</span>
-            </button>
-            
-            <button id="btn-na" onclick="toggleCountCategory('na')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 8px 10px; margin-bottom: 4px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <div style="width: 12px; height: 12px; border-radius: 50%; background: #6b7280; border: 1px solid #fff;"></div>
-                    <span style="color: #fff; font-weight: 600; font-size: 10pt;">N/A</span>
-                </div>
-                <span style="color: #fff; font-size: 14pt; font-weight: 700;" id="count-na">0</span>
-            </button>
-
-            <button id="btn-hubdata" onclick="toggleCountCategory('hubdata')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 8px 10px; margin-bottom: 8px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <div style="width: 12px; height: 12px; border-radius: 50%; background: #22c55e; border: 1px solid #fff;"></div>
-                    <span style="color: #fff; font-weight: 600; font-size: 10pt;">HUB Data</span>
-                </div>
-                <span style="color: #fff; font-size: 14pt; font-weight: 700;" id="count-hubdata">0</span>
-            </button>
-
-            <button id="btn-total" onclick="toggleCountCategory('total')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 10px 12px; background: rgba(255,184,28,0.1); border: 2px solid var(--wvdoh-yellow); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
-                <span style="color: var(--wvdoh-yellow); font-weight: 700; font-size: 11pt; text-transform: uppercase; letter-spacing: 1px;">TOTAL</span>
-                <span style="color: var(--wvdoh-yellow); font-size: 16pt; font-weight: 700;" id="count-total">0</span>
-            </button>
+        <div id="countReportBody" style="padding: 10px 12px; border-radius: 0 0 6px 6px;">
+            <!-- Buttons are built dynamically by buildCountReportButtons() -->
         </div>
     </div>
     
