@@ -226,6 +226,13 @@ function addBridges() {
 
             L.DomEvent.stopPropagation(e);
             removeNameTooltip();
+
+            // HUB Data isolation mode: go directly to project info
+            if (countCategoryState.hubdata) {
+                showProjectInfo(bridge);
+                return;
+            }
+
             showRadialMenu(e.latlng, bridge);
         });
         
@@ -1909,11 +1916,36 @@ window.resetCurrentTab = function() {
     }
 };
 
-// ESC key to reset — mimics the reset button of the active tab, also closes radial menus
+// ESC key to reset — closes radial menus, CR window, HUB toggle, and mimics reset button
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         closeAllMenus();
+
+        // Turn off HUB Data toggle if active
+        if (projectRingsVisible) {
+            projectRingsVisible = false;
+            const btn = document.getElementById('projectToggle');
+            if (btn) {
+                btn.textContent = 'HUB Data: OFF';
+                btn.classList.remove('active');
+            }
+            Object.values(projectRingLayers).forEach(ring => {
+                if (ring._map) ring.remove();
+            });
+        }
+
+        // Reset hubdata CR state if active
+        if (countCategoryState.hubdata) {
+            countCategoryState.critical = true;
+            countCategoryState.emergent = true;
+            countCategoryState.satisfactory = true;
+            countCategoryState.na = false;
+            countCategoryState.hubdata = false;
+            countCategoryState.total = true;
+        }
+
         resetCurrentTab();
+        closeCountReport();
     }
 });
 
@@ -2904,6 +2936,7 @@ const countCategoryState = {
     emergent: true,
     satisfactory: true,
     na: false,
+    hubdata: false,
     total: true
 };
 
@@ -2913,6 +2946,7 @@ let maxCounts = {
     emergent: 0,
     satisfactory: 0,
     na: 0,
+    hubdata: 0,
     total: 0
 };
 
@@ -2921,7 +2955,8 @@ const categoryClickState = {
     critical: 0,
     emergent: 0,
     satisfactory: 0,
-    na: 0
+    na: 0,
+    hubdata: 0
 };
 
 // Categorize a bridge by its worst condition rating (data-based, not color-based)
@@ -2972,8 +3007,9 @@ function calculateMaxBridgeCounts() {
     let emergent = 0;
     let satisfactory = 0;
     let na = 0;
+    let hubdata = 0;
 
-    Object.values(bridgeLayers).forEach(marker => {
+    Object.entries(bridgeLayers).forEach(([bars, marker]) => {
         const bridge = marker.bridgeData;
         if (!bridge) return;
 
@@ -2983,10 +3019,10 @@ function calculateMaxBridgeCounts() {
 
         // Search filter
         if (currentSearchQuery.length > 0) {
-            const bars = (bridge.bars_number || '').toUpperCase();
+            const barsUpper = (bridge.bars_number || '').toUpperCase();
             const name = (bridge.bridge_name || '').toUpperCase();
             const isNumericSearch = /^\d/.test(currentSearchQuery);
-            const matchesBars = isNumericSearch ? bars.startsWith(currentSearchQuery) : bars.includes(currentSearchQuery);
+            const matchesBars = isNumericSearch ? barsUpper.startsWith(currentSearchQuery) : barsUpper.includes(currentSearchQuery);
             const matchesName = isNumericSearch ? name.startsWith(currentSearchQuery) : name.includes(currentSearchQuery);
             if (!matchesBars && !matchesName) return;
         }
@@ -2996,14 +3032,29 @@ function calculateMaxBridgeCounts() {
             if (!bridgePassesAttributesFilter(bridge)) return;
         }
 
+        // Sufficiency filter
+        if (sliderValues.sufficiency < 100) {
+            const calcSuff = getSufficiencyRating(bridge);
+            if (calcSuff == null) return;
+            const suffThreshold = sliderValues.sufficiency / 100 * 9;
+            if (sufficiencyMode === 'lte') {
+                if (calcSuff > suffThreshold) return;
+            } else {
+                if (calcSuff < suffThreshold) return;
+            }
+        }
+
+        // HUB data count
+        if (projectsData[bars]) hubdata++;
+
         const category = getBridgeCategory(bridge);
         if (category === 'critical') critical++;
         else if (category === 'emergent') emergent++;
         else if (category === 'satisfactory') satisfactory++;
         else na++;
     });
-    
-    return { critical, emergent, satisfactory, na, total: critical + emergent + satisfactory + na };
+
+    return { critical, emergent, satisfactory, na, hubdata, total: critical + emergent + satisfactory + na };
 }
 
 // Check if condition sliders are active
@@ -3013,12 +3064,13 @@ function hasConditionSlidersActive() {
     
     if (!evaluationActive) return false;
     
-    // Check if any slider is moved
+    // Check if any slider is moved (including sufficiency)
     return (sliderValues.deck > 0 ||
             sliderValues.superstructure > 0 ||
             sliderValues.substructure > 0 ||
             sliderValues.bearings > 0 ||
-            sliderValues.joints > 0);
+            sliderValues.joints > 0 ||
+            sliderValues.sufficiency < 100);
 }
 
 // Update count report display
@@ -3033,15 +3085,17 @@ function updateCountReport() {
     document.getElementById('count-emergent').textContent = maxCounts.emergent;
     document.getElementById('count-satisfactory').textContent = maxCounts.satisfactory;
     document.getElementById('count-na').textContent = maxCounts.na;
+    document.getElementById('count-hubdata').textContent = maxCounts.hubdata;
     document.getElementById('count-total').textContent = maxCounts.total;
-    
+
     const btnCritical = document.getElementById('btn-critical');
     const btnEmergent = document.getElementById('btn-emergent');
     const btnSatisfactory = document.getElementById('btn-satisfactory');
     const btnNA = document.getElementById('btn-na');
-    
+    const btnHubdata = document.getElementById('btn-hubdata');
+
     if (!hasCondition && !evaluationActive && !(typeof attributesFilterState !== 'undefined' && attributesFilterState.active)) {
-        // Grey out all buttons when no condition filtering and not in maintenance mode
+        // Grey out condition buttons when no condition filtering and not in maintenance mode
         btnCritical.style.opacity = '0.3';
         btnCritical.style.cursor = 'not-allowed';
         btnCritical.disabled = true;
@@ -3063,14 +3117,13 @@ function updateCountReport() {
             btnCritical.disabled = false;
             btnCritical.style.cursor = 'pointer';
             btnCritical.title = 'Click to isolate Critical bridges';
-            // Full opacity if active, dim if inactive
             btnCritical.style.opacity = countCategoryState.critical ? '1.0' : '0.5';
         } else {
             btnCritical.style.opacity = '0.3';
             btnCritical.style.cursor = 'not-allowed';
             btnCritical.disabled = true;
         }
-        
+
         if (maxCounts.emergent > 0) {
             btnEmergent.disabled = false;
             btnEmergent.style.cursor = 'pointer';
@@ -3081,7 +3134,7 @@ function updateCountReport() {
             btnEmergent.style.cursor = 'not-allowed';
             btnEmergent.disabled = true;
         }
-        
+
         if (maxCounts.satisfactory > 0) {
             btnSatisfactory.disabled = false;
             btnSatisfactory.style.cursor = 'pointer';
@@ -3092,7 +3145,7 @@ function updateCountReport() {
             btnSatisfactory.style.cursor = 'not-allowed';
             btnSatisfactory.disabled = true;
         }
-        
+
         if (maxCounts.na > 0) {
             btnNA.disabled = false;
             btnNA.style.cursor = 'pointer';
@@ -3102,6 +3155,20 @@ function updateCountReport() {
             btnNA.style.opacity = '0.3';
             btnNA.style.cursor = 'not-allowed';
             btnNA.disabled = true;
+        }
+    }
+
+    // HUB Data button — always enabled when CR is visible and has project data
+    if (btnHubdata) {
+        if (maxCounts.hubdata > 0) {
+            btnHubdata.disabled = false;
+            btnHubdata.style.cursor = 'pointer';
+            btnHubdata.title = 'Click to isolate HUB Data bridges';
+            btnHubdata.style.opacity = countCategoryState.hubdata ? '1.0' : '0.5';
+        } else {
+            btnHubdata.style.opacity = '0.3';
+            btnHubdata.style.cursor = 'not-allowed';
+            btnHubdata.disabled = true;
         }
     }
     
@@ -3117,9 +3184,9 @@ function updateCountReport() {
     // Update button border styles
     updateButtonStyles();
     
-    // Show box only when a filter mode is actively engaged (not on initial load)
+    // Show box only when a filter is actually active (sliders moved, not just evaluation mode)
     const countReport = document.getElementById('countReport');
-    const filtersEngaged = evaluationActive || inspectionFiltersActive ||
+    const filtersEngaged = hasCondition || inspectionFiltersActive ||
                            (typeof attributesFilterState !== 'undefined' && attributesFilterState.active);
     if (filtersEngaged && maxCounts.total > 0 && countReport.style.display !== 'block') {
         countReport.style.display = 'block';
@@ -3215,29 +3282,35 @@ function updateButtonStyles() {
     const btnEmergent = document.getElementById('btn-emergent');
     const btnSatisfactory = document.getElementById('btn-satisfactory');
     const btnNA = document.getElementById('btn-na');
+    const btnHubdata = document.getElementById('btn-hubdata');
     const btnTotal = document.getElementById('btn-total');
-    
+
     // Active buttons get highlighted border
     if (btnCritical && !btnCritical.disabled) {
         btnCritical.style.borderColor = countCategoryState.critical ? '#dc2626' : 'rgba(255,255,255,0.2)';
         btnCritical.style.borderWidth = countCategoryState.critical ? '2px' : '1px';
     }
-    
+
     if (btnEmergent && !btnEmergent.disabled) {
         btnEmergent.style.borderColor = countCategoryState.emergent ? '#F97316' : 'rgba(255,255,255,0.2)';
         btnEmergent.style.borderWidth = countCategoryState.emergent ? '2px' : '1px';
     }
-    
+
     if (btnSatisfactory && !btnSatisfactory.disabled) {
         btnSatisfactory.style.borderColor = countCategoryState.satisfactory ? '#10b981' : 'rgba(255,255,255,0.2)';
         btnSatisfactory.style.borderWidth = countCategoryState.satisfactory ? '2px' : '1px';
     }
-    
+
     if (btnNA && !btnNA.disabled) {
         btnNA.style.borderColor = countCategoryState.na ? '#6b7280' : 'rgba(255,255,255,0.2)';
         btnNA.style.borderWidth = countCategoryState.na ? '2px' : '1px';
     }
-    
+
+    if (btnHubdata && !btnHubdata.disabled) {
+        btnHubdata.style.borderColor = countCategoryState.hubdata ? '#22c55e' : 'rgba(255,255,255,0.2)';
+        btnHubdata.style.borderWidth = countCategoryState.hubdata ? '2px' : '1px';
+    }
+
     if (btnTotal) {
         btnTotal.style.background = countCategoryState.total ? 'rgba(255,184,28,0.1)' : 'transparent';
     }
@@ -3246,26 +3319,53 @@ function updateButtonStyles() {
 // Toggle category visibility
 window.toggleCountCategory = function(category) {
     const hasCondition = hasConditionSlidersActive();
-    if (!hasCondition && !evaluationActive && !(typeof attributesFilterState !== 'undefined' && attributesFilterState.active) && category !== 'total') return;
-    
+    // HUB Data button bypasses the condition slider requirement
+    if (category !== 'hubdata' && category !== 'total') {
+        if (!hasCondition && !evaluationActive && !(typeof attributesFilterState !== 'undefined' && attributesFilterState.active)) return;
+    }
+
     if (category === 'total') {
-        // Total: Show all except N/A
+        // Total: Show all except N/A and hubdata
         countCategoryState.critical = true;
         countCategoryState.emergent = true;
         countCategoryState.satisfactory = true;
         countCategoryState.na = false;
+        countCategoryState.hubdata = false;
         countCategoryState.total = true;
+    } else if (category === 'hubdata') {
+        // HUB Data: special isolation mode
+        if (categoryClickState.hubdata === 1 && countCategoryState.hubdata) {
+            // Double-click: restore to show all
+            countCategoryState.critical = true;
+            countCategoryState.emergent = true;
+            countCategoryState.satisfactory = true;
+            countCategoryState.na = false;
+            countCategoryState.hubdata = false;
+            countCategoryState.total = true;
+            categoryClickState.hubdata = 0;
+        } else {
+            // First click: isolate HUB data bridges
+            countCategoryState.critical = false;
+            countCategoryState.emergent = false;
+            countCategoryState.satisfactory = false;
+            countCategoryState.na = false;
+            countCategoryState.hubdata = true;
+            countCategoryState.total = false;
+            Object.keys(categoryClickState).forEach(k => categoryClickState[k] = 0);
+            categoryClickState.hubdata = 1;
+        }
     } else {
         // Check for double-click (click same button twice)
-        if (categoryClickState[category] === 1 && 
-            !countCategoryState.critical && !countCategoryState.emergent && 
-            !countCategoryState.satisfactory && !countCategoryState.na && 
+        if (categoryClickState[category] === 1 &&
+            !countCategoryState.critical && !countCategoryState.emergent &&
+            !countCategoryState.satisfactory && !countCategoryState.na &&
             countCategoryState[category]) {
             // Double-click detected - show all
             countCategoryState.critical = true;
             countCategoryState.emergent = true;
             countCategoryState.satisfactory = true;
             countCategoryState.na = false;
+            countCategoryState.hubdata = false;
             countCategoryState.total = true;
             categoryClickState[category] = 0;
         } else {
@@ -3274,25 +3374,76 @@ window.toggleCountCategory = function(category) {
             countCategoryState.emergent = false;
             countCategoryState.satisfactory = false;
             countCategoryState.na = false;
+            countCategoryState.hubdata = false;
             countCategoryState.total = false;
             countCategoryState[category] = true;
-            
+
             // Track click for double-click detection
             Object.keys(categoryClickState).forEach(k => categoryClickState[k] = 0);
             categoryClickState[category] = 1;
         }
     }
-    
+
     // Reapply filters
     updateBridgeSizes();
     applyCountCategoryFilter();
-    
+
     // Auto-zoom
     setTimeout(autoZoomToFilteredBridges, 100);
 };
 
 // Apply category filter
 function applyCountCategoryFilter() {
+    // HUB Data isolation — works independently of condition sliders
+    if (countCategoryState.hubdata) {
+        const baseSize = getPointSize();
+        Object.entries(bridgeLayers).forEach(([bars, marker]) => {
+            const bridge = marker.bridgeData;
+            if (!bridge) return;
+
+            // Respect district filter
+            if (!activeDistricts[bridge.district]) {
+                if (marker._map) marker.remove();
+                return;
+            }
+
+            // Respect search filter
+            if (currentSearchQuery.length > 0) {
+                const barsUpper = (bridge.bars_number || '').toUpperCase();
+                const name = (bridge.bridge_name || '').toUpperCase();
+                const isNumericSearch = /^\d/.test(currentSearchQuery);
+                const matchesBars = isNumericSearch ? barsUpper.startsWith(currentSearchQuery) : barsUpper.includes(currentSearchQuery);
+                const matchesName = isNumericSearch ? name.startsWith(currentSearchQuery) : name.includes(currentSearchQuery);
+                if (!matchesBars && !matchesName) {
+                    if (marker._map) marker.remove();
+                    return;
+                }
+            }
+
+            // Respect attributes filter
+            if (typeof attributesFilterState !== 'undefined' && attributesFilterState.active) {
+                if (!bridgePassesAttributesFilter(bridge)) {
+                    if (marker._map) marker.remove();
+                    return;
+                }
+            }
+
+            // Only show bridges with project data, in solid green
+            if (projectsData[bars]) {
+                marker.setRadius(baseSize);
+                marker.setStyle({
+                    fillColor: '#22c55e',
+                    fillOpacity: 0.85,
+                    opacity: 1
+                });
+                if (!marker._map) marker.addTo(map);
+            } else {
+                if (marker._map) marker.remove();
+            }
+        });
+        return;
+    }
+
     const hasCondition = hasConditionSlidersActive();
 
     // Apply category filtering when condition sliders active OR in maintenance mode
@@ -3421,6 +3572,14 @@ function createProjectRings() {
 
 function updateProjectRings() {
     if (!projectRingsVisible) return;
+
+    // Hide rings when HUB Data is isolated in CR (avoid green-on-green overlap)
+    if (countCategoryState.hubdata) {
+        Object.values(projectRingLayers).forEach(ring => {
+            if (ring._map) ring.remove();
+        });
+        return;
+    }
 
     const ringSize = getPointSize() + 4;
     Object.entries(projectRingLayers).forEach(([bars, ring]) => {

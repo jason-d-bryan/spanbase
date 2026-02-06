@@ -759,16 +759,8 @@
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* Project ring pulse animation */
-        @keyframes ringPulse {
-            0%   { stroke-opacity: 1; stroke-width: 3; }
-            50%  { stroke-opacity: 0.3; stroke-width: 2; }
-            100% { stroke-opacity: 1; stroke-width: 3; }
-        }
+        /* Project ring (static) */
         .project-ring {
-            animation: ringPulse 2s ease-in-out infinite;
-        }
-        .project-ring-static {
             stroke-opacity: 0.85;
         }
 
@@ -1154,14 +1146,22 @@
                 <span style="color: #fff; font-size: 14pt; font-weight: 700;" id="count-satisfactory">0</span>
             </button>
             
-            <button id="btn-na" onclick="toggleCountCategory('na')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 8px 10px; margin-bottom: 8px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
+            <button id="btn-na" onclick="toggleCountCategory('na')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 8px 10px; margin-bottom: 4px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
                 <div style="display: flex; align-items: center; gap: 8px;">
                     <div style="width: 12px; height: 12px; border-radius: 50%; background: #6b7280; border: 1px solid #fff;"></div>
                     <span style="color: #fff; font-weight: 600; font-size: 10pt;">N/A</span>
                 </div>
                 <span style="color: #fff; font-size: 14pt; font-weight: 700;" id="count-na">0</span>
             </button>
-            
+
+            <button id="btn-hubdata" onclick="toggleCountCategory('hubdata')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 8px 10px; margin-bottom: 8px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div style="width: 12px; height: 12px; border-radius: 50%; background: #22c55e; border: 1px solid #fff;"></div>
+                    <span style="color: #fff; font-weight: 600; font-size: 10pt;">HUB Data</span>
+                </div>
+                <span style="color: #fff; font-size: 14pt; font-weight: 700;" id="count-hubdata">0</span>
+            </button>
+
             <button id="btn-total" onclick="toggleCountCategory('total')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 10px 12px; background: rgba(255,184,28,0.1); border: 2px solid var(--wvdoh-yellow); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
                 <span style="color: var(--wvdoh-yellow); font-weight: 700; font-size: 11pt; text-transform: uppercase; letter-spacing: 1px;">TOTAL</span>
                 <span style="color: var(--wvdoh-yellow); font-size: 16pt; font-weight: 700;" id="count-total">0</span>
