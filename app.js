@@ -3540,6 +3540,8 @@ function positionProjectToggle() {
     btn.style.width = legendRect.width + 'px';
     // Position 10px above the legend, aligned right
     btn.style.bottom = (mapRect.bottom - legendRect.top + 10) + 'px';
+    // Show button now that it's positioned
+    btn.style.display = 'block';
 }
 
 function createProjectRings() {
