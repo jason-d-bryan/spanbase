@@ -1,0 +1,8 @@
+# Backup files
+*.jsSAVE
+app.js920
+app.js926
+OLD/
+
+# Claude config
+.claude/
