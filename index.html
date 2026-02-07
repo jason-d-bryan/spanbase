@@ -454,7 +454,7 @@
             background: #376a81;
             border: 2px solid var(--box-border);
             border-radius: 8px;
-            width: 350px;
+            width: 240px;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
         }
         
@@ -794,6 +794,11 @@
             border: 1px solid var(--wvdoh-blue);
             color: var(--wvdoh-blue);
         }
+        .project-toggle.theme {
+            background: #22c55e;
+            border: 1px solid var(--wvdoh-blue);
+            color: var(--wvdoh-blue);
+        }
     </style>
 </head>
 <body>
@@ -808,6 +813,7 @@
     
     <div class="header">
         <div class="header-overlay"></div>
+        <div style="text-align: center; margin-bottom: 2px;"><a href="https://docs.google.com/document/d/1l2MDlr4IAMorvgPfq9pRG9IYsRgGcxOb/edit?usp=sharing&ouid=112943824375355142692&rtpof=true&sd=true" target="_blank" style="color: #fff; font-size: 10pt; text-decoration: none; letter-spacing: 0.5px;">User Manual</a></div>
         <h1>SpanBase</h1>
         <div class="subtitle">Operations Division – 0066</div>
         <div class="email"><a href="mailto:jason.d.bryan@wv.gov">jason.d.bryan@wv.gov</a></div>
@@ -961,17 +967,17 @@
                 </div>
             </div>
             
-            <!-- ADT SLIDER - DISABLED PLACEHOLDER -->
-            <div class="disabled-section" style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
+            <!-- ADT SLIDER -->
+            <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <h4 class="section-title" style="margin: 0;">ADT</h4>
-                    <button disabled style="padding: 4px 10px; font-size: 8pt; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--wvdoh-yellow); border-radius: 3px; cursor: not-allowed; color: var(--wvdoh-yellow); font-weight: 600; opacity: 0.4;">≤ Mode</button>
+                    <button id="adt-mode-toggle" onclick="toggleAdtMode()" style="padding: 4px 10px; font-size: 8pt; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--wvdoh-yellow); border-radius: 3px; cursor: pointer; color: var(--wvdoh-yellow); font-weight: 600;">≤ Mode</button>
                 </div>
-                <input type="range" class="slider" disabled min="0" max="100000" step="1000" value="100000" style="width: 100%;">
+                <input type="range" class="slider" id="slider-adt" min="0" max="100" value="100" style="width: 100%;">
                 <div style="display: flex; justify-content: space-between; margin-top: 5px;">
                     <span style="font-size: 9pt; color: rgba(255,255,255,0.6);">0</span>
-                    <span class="slider-value">100,000</span>
-                    <span style="font-size: 9pt; color: rgba(255,255,255,0.6);">100,000</span>
+                    <span class="slider-value" id="value-adt">150,000</span>
+                    <span style="font-size: 9pt; color: rgba(255,255,255,0.6);">150,000</span>
                 </div>
             </div>
             <!-- NHS FILTER -->
@@ -1082,7 +1088,7 @@
             <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
                 <label class="checkbox-label" style="display: flex; align-items: center; justify-content: center;">
                     <input type="checkbox" id="show-na-bridges" style="margin-right: 8px;"> 
-                    <span style="color: #fff; font-weight: 600;">Show Bridges with N/A Attributes</span>
+                    <span style="color: #fff; font-weight: 600;">Isolate Missing Data</span>
                 </label>
             </div>
             
@@ -1095,7 +1101,7 @@
         </div>
     </div>
     
-    <button id="projectToggle" class="project-toggle" onclick="toggleProjectRings()" style="display: none;">HUB Data: OFF</button>
+    <button id="projectToggle" class="project-toggle" onclick="toggleProjectRings()" style="display: none;">HUB DATA</button>
     <div class="legend">
         <h4>Districts</h4>
         <div class="legend-item"><div class="legend-color" style="background: #e63946;"></div> District 1</div>
@@ -1118,9 +1124,9 @@
     <div class="count-report" id="countReport" style="display: none;">
         <div style="background: #003b5c; padding: 8px 12px; border-bottom: 2px solid var(--box-border); display: flex; justify-content: space-between; align-items: center; border-radius: 6px 6px 0 0; cursor: move;" id="countReportHeader">
             <h4 style="margin: 0; color: var(--wvdoh-yellow); font-size: 11pt; text-transform: uppercase; letter-spacing: 1px; font-weight: 700;">Count Report</h4>
-            <button onclick="closeCountReport()" style="background: transparent; color: #fff; border: none; cursor: pointer; font-weight: 700; font-size: 18pt; padding: 0; line-height: 1;">✕</button>
+            <button onclick="closeCountReport()" style="background: transparent; color: #fff; border: none; cursor: pointer; font-weight: 700; font-size: 11pt; padding: 0; line-height: 1;">✕</button>
         </div>
-        <div id="countReportBody" style="padding: 10px 12px; border-radius: 0 0 6px 6px;">
+        <div id="countReportBody" style="padding: 8px 10px; border-radius: 0 0 6px 6px;">
             <!-- Buttons are built dynamically by buildCountReportButtons() -->
         </div>
     </div>

@@ -116,7 +116,7 @@ async function init() {
         }
 
         // Initialize map with WV bounding box
-        map = L.map('map', { minZoom: 7 });
+        map = L.map('map', { minZoom: 8 });
         
         // Center on West Virginia at zoom level 8
         const wvCenter = [38.9135, -80.1735];
@@ -188,7 +188,7 @@ function addBridges() {
             fillColor: color,
             color: '#fff',
             weight: 2,
-            fillOpacity: 0.85
+            fillOpacity: 1
         });
         
         marker.bridgeData = bridge;
@@ -199,19 +199,21 @@ function addBridges() {
             if (options.opacity === 0 || options.fillOpacity === 0) {
                 return;
             }
-            if (currentZoom <= 8) {
-                showDistrictTooltip(e, bridge);
-            } else if (currentZoom >= 10) {
-                showNameTooltip(e, bridge);
+            const point = map.latLngToContainerPoint(e.latlng);
+            const nearest = getNearestNeighborDist(point, bridge.bars_number);
+
+            if (nearest > 40) {
+                showNameTooltip(e, bridge);    // Name + BARS (well separated)
+            } else if (nearest > 15) {
+                showBarsTooltip(e, bridge);    // BARS only (moderate spacing)
+            } else if (currentZoom <= 9) {
+                showDistrictTooltip(e, bridge); // District name (only at zoom 8-9)
             }
+            // Zoom 10+ and packed tight: no tooltip
         });
 
         marker.on('mouseout', function() {
-            if (currentZoom <= 8) {
-                delayedRemoveTooltip();
-            } else {
-                removeNameTooltip();
-            }
+            removeNameTooltip();
         });
         
         marker.on('click', function(e) {
@@ -247,6 +249,20 @@ function addBridges() {
 }
 
 let districtTooltipTimer = null;
+
+// Get pixel distance to the nearest visible bridge (excluding self)
+function getNearestNeighborDist(point, selfBars) {
+    let minDist = Infinity;
+    Object.entries(bridgeLayers).forEach(([bars, marker]) => {
+        if (!marker._map || bars === selfBars) return;
+        const mp = map.latLngToContainerPoint(marker.getLatLng());
+        const dx = mp.x - point.x;
+        const dy = mp.y - point.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < minDist) minDist = dist;
+    });
+    return minDist;
+}
 
 function showDistrictTooltip(e, bridge) {
     if (districtTooltipTimer) {
@@ -292,10 +308,39 @@ function delayedRemoveTooltip() {
     }, 150);
 }
 
-function showNameTooltip(e, bridge) {
-    // Only show tooltips at zoom 10 or higher
-    if (currentZoom < 10) return;
+function showBarsTooltip(e, bridge) {
+    removeNameTooltip();
 
+    const marker = bridgeLayers[bridge.bars_number];
+    const bridgeColor = marker ? marker.options.fillColor : '#00d9ff';
+    const point = map.latLngToContainerPoint(e.latlng);
+    const tooltip = L.DomUtil.create('div', 'name-tooltip');
+
+    tooltip.style.position = 'absolute';
+    tooltip.style.left = point.x + 'px';
+    tooltip.style.top = (point.y - 40) + 'px';
+    tooltip.style.transform = 'translateX(-50%)';
+    tooltip.style.backgroundColor = bridgeColor;
+    tooltip.style.color = '#fff';
+    tooltip.style.padding = '4px 8px';
+    tooltip.style.borderRadius = '4px';
+    tooltip.style.fontSize = '9pt';
+    tooltip.style.fontWeight = '600';
+    tooltip.style.boxShadow = '0 2px 6px rgba(0,0,0,0.3)';
+    tooltip.style.whiteSpace = 'nowrap';
+    tooltip.style.zIndex = '10000';
+    tooltip.style.pointerEvents = 'none';
+
+    tooltip.innerHTML = `
+        ${bridge.bars_number}
+        <div style="position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 6px solid ${bridgeColor};"></div>
+    `;
+
+    document.getElementById('map').appendChild(tooltip);
+    nameTooltip = tooltip;
+}
+
+function showNameTooltip(e, bridge) {
     removeNameTooltip();
     
     // Get bridge color
@@ -393,7 +438,7 @@ function showRadialMenu(latlng, bridge) {
     center.innerHTML = ``; // Empty, logo is background
     
     // Build nodes - include HUB Data only when project rings are active
-    const nodes = projectRingsVisible ? [
+    const nodes = hubDataMode === 1 ? [
         { angle: 270, label: 'Narrative', action: () => showNarratives(bridge) },        // Top (12 o'clock)
         { angle: 330, label: 'Condition', action: () => showCondition(bridge) },         // Top-right
         { angle: 30,  label: 'HUB Data', action: () => showProjectInfo(bridge) },        // Right
@@ -505,6 +550,10 @@ function showGeometry(bridge) {
                 <span class="info-label">Age</span>
                 <span class="info-value">${age}</span>
             </div>
+            <div class="info-item" style="grid-column: 1 / -1;">
+                <span class="info-label">Type</span>
+                <span class="info-value">${bridge.bridge_type || 'N/A'}</span>
+            </div>
         </div>
         ${bridge.span_lengths ? `<div style="margin-top:15px;"><strong>Span Lengths:</strong> ${bridge.span_lengths}</div>` : ''}
     `, bridge);
@@ -556,6 +605,14 @@ function showAttributes(bridge) {
             <div class="info-item">
                 <span class="info-label">Under Bridge</span>
                 <span class="info-value">${bridge.under_bridge || 'N/A'}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">ADT</span>
+                <span class="info-value">${bridge.adt != null ? bridge.adt.toLocaleString() : 'N/A'}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">ADT Year</span>
+                <span class="info-value">${bridge.adt_year || 'N/A'}</span>
             </div>
         </div>
     `, bridge);
@@ -841,6 +898,65 @@ function getBridgeColor(bridge) {
     return districtColors[bridge.district] || '#00d9ff';
 }
 
+// Get inspection-mode color for a bridge based on due-date status
+// Each record represents a completed inspection; 'due' = when the NEXT one is needed
+function getInspectionColor(bridge) {
+    const inspections = inspectionsData[bridge.bars_number];
+    if (!inspections) return '#888'; // N/A gray
+
+    // Filter by selected types
+    let relevant = inspections;
+    if (selectedInspectionTypes.length > 0) {
+        relevant = inspections.filter(i => selectedInspectionTypes.includes(i.type));
+    }
+    // Filter by selected months
+    if (selectedMonths.length > 0) {
+        relevant = relevant.filter(i => {
+            const d = parseDateString(i.due);
+            return d && selectedMonths.includes(d.getMonth() + 1);
+        });
+    }
+    if (relevant.length === 0) return '#888'; // N/A gray
+
+    const today = new Date();
+    const sixtyDaysMs = 60 * 24 * 60 * 60 * 1000;
+    let worstPastDueDays = 0;
+    let closestUpcomingDays = Infinity;
+    let hasPastDue = false;
+    let hasUpcoming = false;
+
+    relevant.forEach(insp => {
+        const due = parseDateString(insp.due);
+        if (!due) return;
+        if (due < today) {
+            hasPastDue = true;
+            const daysDiff = Math.floor((today - due) / (1000 * 60 * 60 * 24));
+            worstPastDueDays = Math.max(worstPastDueDays, daysDiff);
+        } else if (due <= new Date(today.getTime() + sixtyDaysMs)) {
+            hasUpcoming = true;
+            const daysDiff = Math.floor((due - today) / (1000 * 60 * 60 * 24));
+            closestUpcomingDays = Math.min(closestUpcomingDays, daysDiff);
+        }
+    });
+
+    if (hasPastDue) {
+        // Red HSL gradient: L goes from 50% (just overdue) to 12% (365+ days overdue)
+        const t = Math.min(worstPastDueDays / 365, 1); // 0→1 over a year
+        const lightness = 50 - t * 38; // 50% → 12%
+        return `hsl(0, 80%, ${lightness}%)`;
+    }
+    if (hasUpcoming) {
+        // Orange HSL gradient: hue 30→20, lightness 60%→30% as days decrease
+        const t = 1 - (closestUpcomingDays / 60); // 0 (60 days out) → 1 (due today)
+        const hue = 30 - t * 10; // 30 → 20
+        const lightness = 60 - t * 30; // 60% → 30%
+        return `hsl(${hue}, 90%, ${lightness}%)`;
+    }
+
+    // Completed: all inspections are >60 days out (done, not due soon)
+    return '#10B981';
+}
+
 // Helper function to get sufficiency rating on 0-9 scale
 function getSufficiencyRating(bridge) {
     const bars = bridge.bars_number;
@@ -1013,22 +1129,11 @@ function getEvaluationOpacity(bridge) {
         }
     }
     
-    // If no sliders active, show all bridges based on worst rating
+    // If no sliders active, show all bridges fully opaque
     if (activeSliders.length === 0) {
-        const ratings = [
-            bridge.deck_rating,
-            bridge.superstructure_rating,
-            bridge.substructure_rating,
-            bridge.bearings_rating,
-            bridge.joints_rating,
-            calcSufficiency
-        ].filter(r => r != null && r !== undefined && r > 0);
-        
-        if (ratings.length === 0) return 0.85;
-        const worst = Math.min(...ratings);
-        return 0.2 + (0.65 * (9 - worst) / 8);
+        return 1;
     }
-    
+
     // SEVERITY SCORING with sliders active (excluding sufficiency)
     const ratingMap = {
         deck: bridge.deck_rating,
@@ -1037,35 +1142,26 @@ function getEvaluationOpacity(bridge) {
         bearings: bridge.bearings_rating,
         joints: bridge.joints_rating
     };
-    
+
     const severitySliders = activeSliders.filter(([k]) => k !== 'sufficiency');
-    
-    // If only sufficiency is active, show based on worst rating
+
+    // If only sufficiency is active, show fully opaque
     if (severitySliders.length === 0) {
-        const ratings = Object.values(ratingMap).filter(r => r != null && r > 0);
-        if (ratings.length === 0) return 0.85;
-        const worst = Math.min(...ratings);
-        return 0.2 + (0.65 * (9 - worst) / 8);
+        return 1;
     }
-    
-    let totalSeverity = 0;
+
     let numActiveWithRatings = 0;
-    
+
     severitySliders.forEach(([key, sliderValue]) => {
         const rating = ratingMap[key];
         if (rating != null && rating !== undefined && rating > 0) {
-            const badness = (9 - rating);
-            const severityContribution = badness * (sliderValue / 100);
-            totalSeverity += severityContribution;
             numActiveWithRatings++;
         }
     });
-    
+
     if (numActiveWithRatings === 0) return 0;
-    
-    const avgSeverity = totalSeverity / numActiveWithRatings;
-    const opacityFactor = avgSeverity / 8;
-    return 0.2 + (0.65 * opacityFactor);
+
+    return 1;
 }
 
 function updateBridgeSizes() {
@@ -1074,20 +1170,22 @@ function updateBridgeSizes() {
         updateBridgesForInspection();
         return;
     }
-    
+
     const baseSize = getPointSize();
+    const visibleBridges = [];
+
     Object.values(bridgeLayers).forEach(marker => {
         const bridge = marker.bridgeData;
         const size = evaluationActive ? getEvaluationSize(bridge, baseSize) : baseSize;
         const color = getBridgeColor(bridge);
         let shouldShow = true;
-        
+
         // Check district filter first
         const districtActive = activeDistricts[bridge.district];
         if (!districtActive) {
             shouldShow = false;
         }
-        
+
         // CHECK ATTRIBUTES FILTER
         if (shouldShow && districtActive && typeof attributesFilterState !== 'undefined' && attributesFilterState.active) {
             const passesFilter = bridgePassesAttributesFilter(bridge);
@@ -1095,47 +1193,58 @@ function updateBridgeSizes() {
                 shouldShow = false;
             }
         }
-        
+
         // Apply search filter if active (only if district is active)
         if (shouldShow && districtActive && currentSearchQuery.length > 0) {
             const bars = (bridge.bars_number || '').toUpperCase();
             const name = (bridge.bridge_name || '').toUpperCase();
-            
+
             // Smart search: numbers = startsWith, words = includes (contains)
             const isNumericSearch = /^\d/.test(currentSearchQuery);
             const matchesBars = isNumericSearch ? bars.startsWith(currentSearchQuery) : bars.includes(currentSearchQuery);
             const matchesName = isNumericSearch ? name.startsWith(currentSearchQuery) : name.includes(currentSearchQuery);
-            
+
             if (!matchesBars && !matchesName) {
                 shouldShow = false;
             }
         }
-        
+
         // HIDE BRIDGES WITH N/A (gray color #6b7280) unless N/A is toggled on or search is active
         if (shouldShow && evaluationActive && color.toLowerCase() === '#6b7280') {
             if (!countCategoryState.na && currentSearchQuery.length === 0) {
                 shouldShow = false;
             }
         }
-        
-        // Show or hide marker
+
         if (shouldShow) {
-            // Override color to grey when NA checkbox isolates this bridge
             const displayColor = attributesFilterState.showNA ? '#6b7280' : color;
-            marker.setRadius(size);
-            marker.setStyle({
-                fillColor: displayColor,
-                fillOpacity: 0.85,
-                opacity: 1
-            });
-            if (!marker._map) {
-                marker.addTo(map);
-            }
+            // Get worst rating for z-ordering (lower = worse = draw last)
+            const ratings = [bridge.deck_rating, bridge.superstructure_rating,
+                bridge.substructure_rating, bridge.bearings_rating, bridge.joints_rating]
+                .filter(r => typeof r === 'number' && !isNaN(r) && r >= 1 && r <= 9);
+            const worstRating = ratings.length > 0 ? Math.min(...ratings) : 10; // N/A sorts first (best)
+            visibleBridges.push({ marker, displayColor, size, worstRating });
         } else {
             if (marker._map) {
                 marker.remove();
             }
         }
+    });
+
+    // Sort: best first (high rating), worst last (low rating) — worst drawn on top
+    visibleBridges.sort((a, b) => b.worstRating - a.worstRating);
+
+    visibleBridges.forEach(({ marker, displayColor, size }) => {
+        marker.setRadius(size);
+        marker.setStyle({
+            fillColor: displayColor,
+            fillOpacity: 1,
+            opacity: 1
+        });
+        if (!marker._map) {
+            marker.addTo(map);
+        }
+        marker.bringToFront();
     });
     
     // Apply count category filter (if condition sliders active)
@@ -1266,15 +1375,8 @@ function setupSearch() {
         currentSearchQuery = originalValue.trim();
         applySearch();
         
-        // Auto-zoom to results after 2+ numbers OR after any word ends (space detected)
-        const isNumericSearch = /^\d/.test(currentSearchQuery);
-        const wordCount = originalValue.trim().split(/\s+/).length;
-        const hasSpace = originalValue.includes(' ');
-        
-        const shouldZoom = (isNumericSearch && currentSearchQuery.length >= 2) || 
-                          (!isNumericSearch && hasSpace && currentSearchQuery.length > 0);
-        
-        if (shouldZoom) {
+        // Auto-zoom whenever query has 1+ characters (including after backspace)
+        if (currentSearchQuery.length >= 1) {
             zoomToSearchResults();
         }
     });
@@ -1322,51 +1424,9 @@ function zoomToSearchResults() {
 }
 
 function applySearch() {
-    if (currentSearchQuery.length === 0) {
-        // No search - restore all bridges
-        Object.values(bridgeLayers).forEach(marker => {
-            const bridge = marker.bridgeData;
-            marker.setStyle({ 
-                fillOpacity: evaluationActive ? getEvaluationOpacity(bridge) : 0.85,
-                opacity: 1 // Outline visible
-            });
-        });
-        return;
-    }
-    
-    // Search on BARS number OR bridge name
-    Object.values(bridgeLayers).forEach(marker => {
-        const bridge = marker.bridgeData;
-        const bars = (bridge.bars_number || '').toUpperCase();
-        const name = (bridge.bridge_name || '').toUpperCase();
-        
-        // Smart search: numbers = startsWith, words = includes
-        const isNumericSearch = /^\d/.test(currentSearchQuery);
-        const matchesBars = isNumericSearch ? bars.startsWith(currentSearchQuery) : bars.includes(currentSearchQuery);
-        const matchesName = isNumericSearch ? name.startsWith(currentSearchQuery) : name.includes(currentSearchQuery);
-        
-        if (matchesBars || matchesName) {
-            // Match - check if district is active
-            const districtActive = activeDistricts[bridge.district];
-            if (districtActive) {
-                marker.setStyle({ 
-                    fillOpacity: evaluationActive ? getEvaluationOpacity(bridge) : 0.85,
-                    opacity: 1 // Outline visible
-                });
-            } else {
-                marker.setStyle({ 
-                    fillOpacity: 0,
-                    opacity: 0
-                });
-            }
-        } else {
-            // No match - hide both fill and outline
-            marker.setStyle({ 
-                fillOpacity: 0,
-                opacity: 0 // Outline hidden
-            });
-        }
-    });
+    // Delegate to updateBridgeSizes which handles all visibility logic
+    // (district, search, attributes, evaluation) in one consistent pass
+    updateBridgeSizes();
 }
 
 function updateStats() {
@@ -1378,7 +1438,30 @@ let mouseLatLng = { lat: 0, lng: 0 };
 function createDebugPanel() {
     const panel = L.DomUtil.create('div', 'debug-panel');
     panel.id = 'debugPanel';
+    panel.style.cursor = 'move';
     document.body.appendChild(panel);
+
+    // Make debug panel draggable
+    let dragOffsetX = 0, dragOffsetY = 0;
+    panel.addEventListener('mousedown', function(e) {
+        // Don't drag when clicking inside scrollable content
+        if (e.target !== panel && e.target.tagName !== 'H4') return;
+        e.preventDefault();
+        dragOffsetX = e.clientX - panel.getBoundingClientRect().left;
+        dragOffsetY = e.clientY - panel.getBoundingClientRect().top;
+
+        function onMouseMove(ev) {
+            panel.style.left = (ev.clientX - dragOffsetX) + 'px';
+            panel.style.top = (ev.clientY - dragOffsetY) + 'px';
+            panel.style.bottom = 'auto';
+        }
+        function onMouseUp() {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        }
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+    });
 
     // Track mouse position on map
     map.on('mousemove', function(e) {
@@ -1681,7 +1764,7 @@ function updateBridgeVisibility() {
             } else {
                 marker.setStyle({
                     fillColor: districtColors[bridge.district],
-                    fillOpacity: 0.85,
+                    fillOpacity: 1,
                     opacity: 1
                 });
             }
@@ -1919,37 +2002,45 @@ window.resetCurrentTab = function() {
     }
 };
 
+// Ctrl+Shift+D to toggle debug panel
+document.addEventListener('keydown', function(e) {
+    if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+        e.preventDefault();
+        const panel = document.getElementById('debugPanel');
+        if (panel) {
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        }
+    }
+});
+
 // ESC key to reset — closes radial menus, CR window, HUB toggle, and mimics reset button
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         closeAllMenus();
 
-        // Dismiss route disambiguation popup
-        const routePopup = document.getElementById('routeDisambig');
-        if (routePopup) routePopup.remove();
-
         // Turn off HUB Data toggle if active
-        if (projectRingsVisible) {
+        if (hubDataMode > 0) {
+            hubDataMode = 0;
             projectRingsVisible = false;
             const btn = document.getElementById('projectToggle');
             if (btn) {
-                btn.textContent = 'HUB Data: OFF';
-                btn.classList.remove('active');
+                btn.classList.remove('active', 'theme');
             }
             Object.values(projectRingLayers).forEach(ring => {
                 if (ring._map) ring.remove();
             });
         }
 
-        // Reset hubdata CR state if active
-        if (countCategoryState.hubdata) {
-            countCategoryState.critical = true;
-            countCategoryState.emergent = true;
-            countCategoryState.satisfactory = true;
-            countCategoryState.na = false;
-            countCategoryState.hubdata = false;
-            countCategoryState.total = true;
-        }
+        // Reset all CR category state to defaults
+        countCategoryState.critical = true;
+        countCategoryState.emergent = true;
+        countCategoryState.satisfactory = true;
+        countCategoryState.completed = true;
+        countCategoryState.na = false;
+        countCategoryState.hubdata = false;
+        countCategoryState.total = true;
+        hubDataMode = 0;
+        Object.keys(categoryClickState).forEach(k => categoryClickState[k] = 0);
 
         // Clear showNA state before tab reset so the first updateBridgeSizes pass is clean
         if (attributesFilterState.showNA) {
@@ -2087,10 +2178,8 @@ function updateBridgesForInspection() {
         const inspections = inspectionsData[bars];
 
         let show = false;
-        let color = districtColors[bridge.district] || '#00d9ff';  // Default to district color
+        let color = districtColors[bridge.district] || '#00d9ff';
         let size = baseSize;
-        let overdueCount = 0;
-        let daysOverdue = 0;
 
         if (inspections && inspections.length > 0) {
             // Filter by inspection type if selected
@@ -2107,74 +2196,29 @@ function updateBridgesForInspection() {
                     return;
                 }
             }
-            
-            // Calculate overdue count and due dates
-            let matchesMonth = false;
-            
-            relevantInspections.forEach(insp => {
-                if (!insp.due) return;
-                
-                const dueDate = parseDateString(insp.due);
-                if (!dueDate) return;
-                
-                // Check if overdue
-                if (dueDate < today) {
-                    overdueCount++;
-                    const daysDiff = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
-                    daysOverdue = Math.max(daysOverdue, daysDiff);
-                }
-                
-                // Check if matches selected month
-                if (selectedMonths.length > 0) {
-                    const dueMonth = dueDate.getMonth() + 1;
-                    if (selectedMonths.includes(dueMonth)) {
+
+            // Check month filter
+            if (selectedMonths.length > 0) {
+                let matchesMonth = false;
+                relevantInspections.forEach(insp => {
+                    const dueDate = parseDateString(insp.due);
+                    if (dueDate && selectedMonths.includes(dueDate.getMonth() + 1)) {
                         matchesMonth = true;
                     }
-                }
-            });
-            
-            // Determine if bridge should be shown
-            if (selectedMonths.length > 0) {
+                });
                 show = matchesMonth;
             } else if (selectedInspectionTypes.length > 0) {
-                // Types selected - show only bridges with those types
                 show = true;
             } else {
-                // NO filters - show ALL bridges
                 show = true;
             }
-            
+
             if (show) {
-                // SIZE: Based on number of overdue inspections
-                if (overdueCount > 0) {
-                    size = baseSize + (overdueCount * 3); // +3px per overdue
-                    size = Math.min(size, 25); // Cap at 25px
-                }
-                
-                // COLOR: Use inspection color scheme when filters are active
-                if (overdueCount > 0) {
-                    // Red gradient based on days overdue
-                    if (daysOverdue > 180) {
-                        color = '#7F1D1D'; // Dark red (6+ months overdue)
-                    } else if (daysOverdue > 90) {
-                        color = '#991B1B'; // Red (3-6 months overdue)
-                    } else if (daysOverdue > 30) {
-                        color = '#DC2626'; // Bright red (1-3 months overdue)
-                    } else {
-                        color = '#EF4444'; // Light red (recently overdue)
-                    }
-                } else if (selectedInspectionTypes.length > 0 || selectedMonths.length > 0) {
-                    // Filters active and NOT overdue = Green
-                    color = '#10B981';
-                } else {
-                    // No filters active - use district colors
-                    color = districtColors[bridge.district] || '#00d9ff';
-                }
+                color = getInspectionColor(bridge);
             }
         } else {
             // No inspection data
             if (selectedInspectionTypes.length === 0 && selectedMonths.length === 0) {
-                // No filters - show bridge with district color
                 show = true;
             }
         }
@@ -2193,22 +2237,26 @@ function updateBridgesForInspection() {
         }
         
         if (show) {
-            bridgesByOverdue.push({ marker, overdueCount, color, size });
+            // Assign z-priority: green=0, orange=1, red=2 (red drawn last / on top)
+            let zPriority = 0;
+            if (color.startsWith('hsl(0')) zPriority = 2;       // red/past-due
+            else if (color.startsWith('hsl(')) zPriority = 1;   // orange/upcoming
+            bridgesByOverdue.push({ marker, color, size, zPriority });
         } else {
             marker.setStyle({ fillOpacity: 0, opacity: 0 });
             if (marker._map) marker.remove();
         }
     });
-    
-    // Sort by overdue count (lowest first so highest drawn last)
-    bridgesByOverdue.sort((a, b) => a.overdueCount - b.overdueCount);
+
+    // Sort by priority (lowest first so highest drawn last / on top)
+    bridgesByOverdue.sort((a, b) => a.zPriority - b.zPriority);
     
     // Apply styles in order (draws in order on map)
     bridgesByOverdue.forEach(({ marker, color, size }) => {
         marker.setRadius(size);
         marker.setStyle({
             fillColor: color,
-            fillOpacity: 0.85,
+            fillOpacity: 1,
             opacity: 1
         });
         if (!marker._map) {
@@ -2422,12 +2470,12 @@ const attributesFilterState = {
     width: { value: 880, mode: 'lte' },
     area: { value: 403000, mode: 'lte' },
     age: { value: 210, mode: 'lte' },
+    adt: { value: 150000, mode: 'lte' },
     nhs: 'all',
     utilities: false,
     onBridge: [],
     underBridge: [],
     route: '',
-    routeType: 'all',  // 'all', 'interstate', 'local'
     subroute: '',
     showNA: false  // Don't show N/A bridges by default
 };
@@ -2456,8 +2504,15 @@ window.toggleAreaMode = function() {
 
 window.toggleAgeMode = function() {
     attributesFilterState.age.mode = attributesFilterState.age.mode === 'lte' ? 'gte' : 'lte';
-    document.getElementById('age-mode-toggle').textContent = 
+    document.getElementById('age-mode-toggle').textContent =
         attributesFilterState.age.mode === 'lte' ? '≤ Mode' : '≥ Mode';
+    applyAttributesFilter();
+};
+
+window.toggleAdtMode = function() {
+    attributesFilterState.adt.mode = attributesFilterState.adt.mode === 'lte' ? 'gte' : 'lte';
+    document.getElementById('adt-mode-toggle').textContent =
+        attributesFilterState.adt.mode === 'lte' ? '≤ Mode' : '≥ Mode';
     applyAttributesFilter();
 };
 
@@ -2492,7 +2547,12 @@ window.resetAttributesFilter = function() {
     document.getElementById('slider-age').value = 100;
     document.getElementById('value-age').textContent = '210 years';
     document.getElementById('age-mode-toggle').textContent = '≤ Mode';
-    
+
+    attributesFilterState.adt = { value: 150000, mode: 'lte' };
+    document.getElementById('slider-adt').value = 100;
+    document.getElementById('value-adt').textContent = '150,000';
+    document.getElementById('adt-mode-toggle').textContent = '≤ Mode';
+
     setNhsFilter('all');
     
     document.getElementById('attr-utilities').checked = false;
@@ -2506,7 +2566,6 @@ window.resetAttributesFilter = function() {
     attributesFilterState.onBridge = [];
     attributesFilterState.underBridge = [];
     attributesFilterState.route = '';
-    attributesFilterState.routeType = 'all';
     attributesFilterState.subroute = '';
     attributesFilterState.showNA = false;
     attributesFilterState.active = false;
@@ -2592,6 +2651,21 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
+    const adtSlider = document.getElementById('slider-adt');
+    if (adtSlider) {
+        adtSlider.addEventListener('input', function() {
+            const actualValue = sliderToValue(parseInt(this.value), 0, 150000, 'adt');
+            attributesFilterState.adt.value = actualValue;
+            document.getElementById('value-adt').textContent = actualValue.toLocaleString();
+            applyAttributesFilter();
+        });
+        adtSlider.addEventListener('change', function() {
+            if (attributesFilterState.adt.value < 150000) {
+                setTimeout(autoZoomToFilteredBridges, 100);
+            }
+        });
+    }
+
     const utilitiesCheckbox = document.getElementById('attr-utilities');
     if (utilitiesCheckbox) {
         utilitiesCheckbox.addEventListener('change', function() {
@@ -2631,22 +2705,11 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     const routeSearch = document.getElementById('route-search');
-    const interstateRoutes = ['64', '77', '79'];
     if (routeSearch) {
         routeSearch.addEventListener('input', function() {
-            const val = this.value.trim();
-            attributesFilterState.routeType = 'all';
-            dismissRoutePopup();
-
-            // Check if typed value matches an interstate route number
-            if (interstateRoutes.includes(val)) {
-                showRoutePopup(val, this);
-                return; // don't filter yet — wait for popup choice
-            }
-
-            attributesFilterState.route = val;
+            attributesFilterState.route = this.value.trim();
             applyAttributesFilter();
-            if (val.length > 0) {
+            if (this.value.trim().length > 0) {
                 setTimeout(autoZoomToFilteredBridges, 100);
             }
         });
@@ -2664,62 +2727,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // --- Interstate / Local Route Popup ---
-    function showRoutePopup(routeNum, inputEl) {
-        dismissRoutePopup();
-        const popup = document.createElement('div');
-        popup.id = 'routeDisambig';
-        popup.style.cssText = 'position: absolute; z-index: 10000; background: #003b5c; border: 2px solid var(--wvdoh-yellow); border-radius: 6px; padding: 10px 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 8px; min-width: 180px;';
-
-        const label = document.createElement('div');
-        label.style.cssText = 'color: rgba(255,255,255,0.6); font-size: 9pt; text-align: center; font-style: italic;';
-        label.textContent = 'Which route ' + routeNum + '?';
-        popup.appendChild(label);
-
-        const btnInterstate = document.createElement('button');
-        btnInterstate.style.cssText = 'padding: 8px 12px; background: var(--wvdoh-yellow); color: var(--wvdoh-blue); border: none; border-radius: 4px; cursor: pointer; font-weight: 700; font-size: 10pt;';
-        btnInterstate.textContent = 'Interstate ' + routeNum;
-        btnInterstate.addEventListener('click', function() {
-            attributesFilterState.route = routeNum;
-            attributesFilterState.routeType = 'interstate';
-            dismissRoutePopup();
-            applyAttributesFilter();
-            setTimeout(autoZoomToFilteredBridges, 100);
-        });
-        popup.appendChild(btnInterstate);
-
-        const btnLocal = document.createElement('button');
-        btnLocal.style.cssText = 'padding: 8px 12px; background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.3); border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 10pt;';
-        btnLocal.textContent = 'Local Route ' + routeNum;
-        btnLocal.addEventListener('click', function() {
-            attributesFilterState.route = routeNum;
-            attributesFilterState.routeType = 'local';
-            dismissRoutePopup();
-            applyAttributesFilter();
-            setTimeout(autoZoomToFilteredBridges, 100);
-        });
-        popup.appendChild(btnLocal);
-
-        // Position below the input
-        const rect = inputEl.getBoundingClientRect();
-        popup.style.top = (rect.bottom + 4) + 'px';
-        popup.style.left = rect.left + 'px';
-        document.body.appendChild(popup);
-    }
-
-    function dismissRoutePopup() {
-        const existing = document.getElementById('routeDisambig');
-        if (existing) existing.remove();
-    }
-
-    // Dismiss popup on outside click
-    document.addEventListener('click', function(e) {
-        const popup = document.getElementById('routeDisambig');
-        if (popup && !popup.contains(e.target) && e.target.id !== 'route-search') {
-            dismissRoutePopup();
-        }
-    });
-
     // Show N/A bridges toggle
     const showNACheckbox = document.getElementById('show-na-bridges');
     if (showNACheckbox) {
@@ -2739,6 +2746,7 @@ function applyAttributesFilter() {
         attributesFilterState.width.value < 880 ||
         attributesFilterState.area.value < 403000 ||
         attributesFilterState.age.value < 210 ||
+        attributesFilterState.adt.value < 150000 ||
         attributesFilterState.nhs !== 'all' ||
         attributesFilterState.utilities ||
         attributesFilterState.onBridge.length > 0 ||
@@ -2812,13 +2820,15 @@ function bridgePassesAttributesFilter(bridge) {
         const widthActive = attributesFilterState.width.value < 880;
         const areaActive = attributesFilterState.area.value < 403000;
         const ageActive = attributesFilterState.age.value < 210;
-        const anySliderActive = lengthActive || widthActive || areaActive || ageActive;
+        const adtActive = attributesFilterState.adt.value < 150000;
+        const anySliderActive = lengthActive || widthActive || areaActive || ageActive || adtActive;
 
         let hasNA = false;
         const checkLength = anySliderActive ? lengthActive : true;
         const checkWidth = anySliderActive ? widthActive : true;
         const checkArea = anySliderActive ? areaActive : true;
         const checkAge = anySliderActive ? ageActive : true;
+        const checkAdt = anySliderActive ? adtActive : true;
 
         if (checkLength) {
             const length = parseFloat(bridge.bridge_length);
@@ -2835,6 +2845,10 @@ function bridgePassesAttributesFilter(bridge) {
         if (checkAge) {
             const age = parseInt(bridge.bridge_age);
             if (isNaN(age) || age === 0) hasNA = true;
+        }
+        if (checkAdt) {
+            const adt = parseInt(bridge.adt);
+            if (isNaN(adt) || adt === 0) hasNA = true;
         }
         if (!hasNA) return false;
         // When showNA is the only active filter (no sliders moved), skip dimension filters below
@@ -2857,8 +2871,12 @@ function bridgePassesAttributesFilter(bridge) {
             const age = parseInt(bridge.bridge_age);
             if (isNaN(age) || age === 0) return false;
         }
+        if (attributesFilterState.adt.value < 150000) {
+            const adt = parseInt(bridge.adt);
+            if (isNaN(adt) || adt === 0) return false;
+        }
     }
-    
+
     // Length filter
     const length = parseFloat(bridge.bridge_length) || 0;
     if (attributesFilterState.length.mode === 'lte' && length > attributesFilterState.length.value) return false;
@@ -2878,7 +2896,14 @@ function bridgePassesAttributesFilter(bridge) {
     const age = parseInt(bridge.bridge_age) || 0;
     if (attributesFilterState.age.mode === 'lte' && age > attributesFilterState.age.value) return false;
     if (attributesFilterState.age.mode === 'gte' && age < attributesFilterState.age.value) return false;
-    
+
+    // ADT filter
+    if (attributesFilterState.adt.value < 150000) {
+        const adt = parseInt(bridge.adt) || 0;
+        if (attributesFilterState.adt.mode === 'lte' && adt > attributesFilterState.adt.value) return false;
+        if (attributesFilterState.adt.mode === 'gte' && adt < attributesFilterState.adt.value) return false;
+    }
+
     // NHS filter
     if (attributesFilterState.nhs === 'yes' && bridge.nhs !== 'Yes') return false;
     if (attributesFilterState.nhs === 'no' && bridge.nhs === 'Yes') return false;
@@ -2912,20 +2937,11 @@ function bridgePassesAttributesFilter(bridge) {
         if (!matches) return false;
     }
     
-    // Route filter — exact match after stripping leading zeros
+    // Route filter — startsWith after stripping leading zeros
     if (attributesFilterState.route.length > 0) {
         const bridgeRoute = (bridge.route || '').toString().replace(/^0+/, '') || '0';
         const searchRoute = attributesFilterState.route.replace(/^0+/, '') || '0';
-        if (bridgeRoute !== searchRoute) return false;
-
-        // Interstate vs Local disambiguation
-        if (attributesFilterState.routeType === 'interstate') {
-            const fc = (bridge.functional_class || '').toLowerCase();
-            if (!fc.includes('interstate')) return false;
-        } else if (attributesFilterState.routeType === 'local') {
-            const fc = (bridge.functional_class || '').toLowerCase();
-            if (fc.includes('interstate')) return false;
-        }
+        if (!bridgeRoute.startsWith(searchRoute)) return false;
     }
     
     // Subroute filter
@@ -2946,7 +2962,8 @@ function buildQuantileTables() {
         length: { getter: b => parseFloat(b.bridge_length) || 0, max: 4020 },
         width:  { getter: b => parseFloat(b.width_out_to_out) || 0, max: 880 },
         area:   { getter: b => parseFloat(b.bridge_area) || 0, max: 403000 },
-        age:    { getter: b => parseInt(b.bridge_age) || 0, max: 210 }
+        age:    { getter: b => parseInt(b.bridge_age) || 0, max: 210 },
+        adt:    { getter: b => parseInt(b.adt) || 0, max: 150000 }
     };
 
     Object.entries(fields).forEach(([key, cfg]) => {
@@ -3115,46 +3132,87 @@ function autoZoomToFilteredBridges() {
 
 // Track which CR button set is currently rendered: 'default' or 'full'
 let crButtonMode = null;
+let crButtonInspection = null; // track whether buttons were built for inspection mode
 
 // Build CR buttons dynamically based on active filter context
 // 'default' = HUB Data, N/A, Total (no condition sliders engaged)
 // 'full' = Critical, Emergent, Satisfactory, N/A, HUB Data, Total (condition sliders engaged)
 function buildCountReportButtons(mode) {
-    if (mode === crButtonMode) return; // already in correct mode
+    const isInspection = !!inspectionFiltersActive;
+    if (mode === crButtonMode && isInspection === crButtonInspection) return; // already in correct mode
     crButtonMode = mode;
+    crButtonInspection = isInspection;
 
     const body = document.getElementById('countReportBody');
     if (!body) return;
 
-    const btnStyle = 'display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 8px 10px; margin-bottom: 4px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; transition: all 0.2s;';
-    const dotStyle = 'width: 12px; height: 12px; border-radius: 50%; border: 1px solid #fff;';
-    const labelStyle = 'color: #fff; font-weight: 600; font-size: 10pt;';
-    const countStyle = 'color: #fff; font-size: 14pt; font-weight: 700;';
+    const btnStyle = 'display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 5px 8px; margin-bottom: 3px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; transition: all 0.2s;';
+    const dotStyle = 'width: 10px; height: 10px; border-radius: 50%; border: 1px solid #fff;';
+    const labelStyle = 'color: #fff; font-weight: 600; font-size: 9pt;';
+    const countStyle = 'color: #fff; font-size: 12pt; font-weight: 700;';
 
-    let html = '<div style="font-size: 9pt; color: rgba(255,255,255,0.5); margin-bottom: 6px; text-align: center; font-style: italic;">Click to isolate</div>';
+    let html = '<div style="font-size: 8pt; color: rgba(255,255,255,0.5); margin-bottom: 4px; text-align: center; font-style: italic;">Click to isolate</div>';
 
     if (mode === 'full') {
-        html += `<button id="btn-critical" onclick="toggleCountCategory('critical')" style="${btnStyle}">
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <div style="${dotStyle} background: #dc2626;"></div>
-                <span style="${labelStyle}">Critical</span>
-            </div>
-            <span style="${countStyle}" id="count-critical">0</span>
-        </button>`;
-        html += `<button id="btn-emergent" onclick="toggleCountCategory('emergent')" style="${btnStyle}">
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <div style="${dotStyle} background: #F97316;"></div>
-                <span style="${labelStyle}">Emergent</span>
-            </div>
-            <span style="${countStyle}" id="count-emergent">0</span>
-        </button>`;
-        html += `<button id="btn-satisfactory" onclick="toggleCountCategory('satisfactory')" style="${btnStyle}">
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <div style="${dotStyle} background: #10b981;"></div>
-                <span style="${labelStyle}">Satisfactory</span>
-            </div>
-            <span style="${countStyle}" id="count-satisfactory">0</span>
-        </button>`;
+        if (inspectionFiltersActive) {
+            // Inspection mode: Past Due → Upcoming → Completed
+            html += `<button id="btn-critical" onclick="toggleCountCategory('critical')" style="${btnStyle}">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div style="${dotStyle} background: #dc2626;"></div>
+                    <span style="${labelStyle}">Past Due</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="${countStyle}" id="count-critical">0</span>
+                    <span onclick="event.stopPropagation(); showCategoryTable('critical')"
+                          style="cursor:pointer; font-size:9pt; opacity:0.6;" title="View table">☰</span>
+                </div>
+            </button>`;
+            html += `<button id="btn-emergent" onclick="toggleCountCategory('emergent')" style="${btnStyle}">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div style="${dotStyle} background: #F97316;"></div>
+                    <span style="${labelStyle}">Upcoming</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="${countStyle}" id="count-emergent">0</span>
+                    <span onclick="event.stopPropagation(); showCategoryTable('emergent')"
+                          style="cursor:pointer; font-size:9pt; opacity:0.6;" title="View table">☰</span>
+                </div>
+            </button>`;
+            html += `<button id="btn-satisfactory" onclick="toggleCountCategory('satisfactory')" style="${btnStyle}">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div style="${dotStyle} background: #10B981;"></div>
+                    <span style="${labelStyle}">Completed</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="${countStyle}" id="count-satisfactory">0</span>
+                    <span onclick="event.stopPropagation(); showCategoryTable('satisfactory')"
+                          style="cursor:pointer; font-size:9pt; opacity:0.6;" title="View table">☰</span>
+                </div>
+            </button>`;
+        } else {
+            // Maintenance/evaluation mode: Critical → Emergent → Satisfactory
+            html += `<button id="btn-critical" onclick="toggleCountCategory('critical')" style="${btnStyle}">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div style="${dotStyle} background: #dc2626;"></div>
+                    <span style="${labelStyle}">Critical</span>
+                </div>
+                <span style="${countStyle}" id="count-critical">0</span>
+            </button>`;
+            html += `<button id="btn-emergent" onclick="toggleCountCategory('emergent')" style="${btnStyle}">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div style="${dotStyle} background: #F97316;"></div>
+                    <span style="${labelStyle}">Emergent</span>
+                </div>
+                <span style="${countStyle}" id="count-emergent">0</span>
+            </button>`;
+            html += `<button id="btn-satisfactory" onclick="toggleCountCategory('satisfactory')" style="${btnStyle}">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div style="${dotStyle} background: #10b981;"></div>
+                    <span style="${labelStyle}">Satisfactory</span>
+                </div>
+                <span style="${countStyle}" id="count-satisfactory">0</span>
+            </button>`;
+        }
     }
 
     // N/A — always present
@@ -3167,7 +3225,7 @@ function buildCountReportButtons(mode) {
     </button>`;
 
     // HUB Data — always present (extra bottom margin before Total)
-    html += `<button id="btn-hubdata" onclick="toggleCountCategory('hubdata')" style="${btnStyle} margin-bottom: 8px;">
+    html += `<button id="btn-hubdata" onclick="toggleCountCategory('hubdata')" style="${btnStyle} margin-bottom: 6px;">
         <div style="display: flex; align-items: center; gap: 8px;">
             <div style="${dotStyle} background: #22c55e;"></div>
             <span style="${labelStyle}">HUB Data</span>
@@ -3176,9 +3234,9 @@ function buildCountReportButtons(mode) {
     </button>`;
 
     // Total — always present
-    html += `<button id="btn-total" onclick="toggleCountCategory('total')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 10px 12px; background: rgba(255,184,28,0.1); border: 2px solid var(--wvdoh-yellow); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
-        <span style="color: var(--wvdoh-yellow); font-weight: 700; font-size: 11pt; text-transform: uppercase; letter-spacing: 1px;">TOTAL</span>
-        <span style="color: var(--wvdoh-yellow); font-size: 16pt; font-weight: 700;" id="count-total">0</span>
+    html += `<button id="btn-total" onclick="toggleCountCategory('total')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 6px 8px; background: rgba(255,184,28,0.1); border: 2px solid var(--wvdoh-yellow); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
+        <span style="color: var(--wvdoh-yellow); font-weight: 700; font-size: 9pt; text-transform: uppercase; letter-spacing: 1px;">TOTAL</span>
+        <span style="color: var(--wvdoh-yellow); font-size: 12pt; font-weight: 700;" id="count-total">0</span>
     </button>`;
 
     body.innerHTML = html;
@@ -3190,6 +3248,7 @@ const countCategoryState = {
     critical: true,
     emergent: true,
     satisfactory: true,
+    completed: true,
     na: false,
     hubdata: false,
     total: true
@@ -3200,6 +3259,7 @@ let maxCounts = {
     critical: 0,
     emergent: 0,
     satisfactory: 0,
+    completed: 0,
     na: 0,
     hubdata: 0,
     total: 0
@@ -3210,13 +3270,54 @@ const categoryClickState = {
     critical: 0,
     emergent: 0,
     satisfactory: 0,
+    completed: 0,
     na: 0,
     hubdata: 0
 };
 
+// HUB Data project toggle: 0 = off (blue), 1 = on (yellow), 2 = theme only (green)
+let hubDataMode = 0;
+
 // Categorize a bridge by its worst condition rating (data-based, not color-based)
 // When evaluation sliders are active, only considers the active slider components
+// When inspection filters are active, categorizes by due date instead
 function getBridgeCategory(bridge) {
+    // Inspection mode: categorize by due-date status
+    // Each record = a performed inspection; 'due' = when the NEXT one is needed
+    if (inspectionFiltersActive) {
+        const inspections = inspectionsData[bridge.bars_number];
+        if (!inspections) return 'na';
+
+        // Filter by selected types
+        let relevant = inspections;
+        if (selectedInspectionTypes.length > 0) {
+            relevant = inspections.filter(i => selectedInspectionTypes.includes(i.type));
+        }
+        // Filter by selected months
+        if (selectedMonths.length > 0) {
+            relevant = relevant.filter(i => {
+                const d = parseDateString(i.due);
+                return d && selectedMonths.includes(d.getMonth() + 1);
+            });
+        }
+        if (relevant.length === 0) return 'na';
+
+        const today = new Date();
+        const sixtyDays = new Date(today.getTime() + 60 * 24 * 60 * 60 * 1000);
+        let hasOverdue = false, hasUpcoming = false;
+
+        relevant.forEach(insp => {
+            const due = parseDateString(insp.due);
+            if (!due) return;
+            if (due < today) hasOverdue = true;
+            else if (due <= sixtyDays) hasUpcoming = true;
+        });
+
+        if (hasOverdue) return 'critical';      // Past Due
+        if (hasUpcoming) return 'emergent';      // Upcoming
+        return 'satisfactory';                   // Future
+    }
+
     const ratingMap = {
         deck: bridge.deck_rating,
         superstructure: bridge.superstructure_rating,
@@ -3261,6 +3362,7 @@ function calculateMaxBridgeCounts() {
     let critical = 0;
     let emergent = 0;
     let satisfactory = 0;
+    let completed = 0;
     let na = 0;
     let hubdata = 0;
 
@@ -3305,11 +3407,276 @@ function calculateMaxBridgeCounts() {
         const category = getBridgeCategory(bridge);
         if (category === 'critical') critical++;
         else if (category === 'emergent') emergent++;
+        else if (category === 'completed') completed++;
         else if (category === 'satisfactory') satisfactory++;
         else na++;
     });
 
-    return { critical, emergent, satisfactory, na, hubdata, total: critical + emergent + satisfactory + na };
+    return { critical, emergent, satisfactory, completed, na, hubdata, total: critical + emergent + satisfactory + completed + na };
+}
+
+// Category label mapping for inspection CR table popups
+const categoryLabels = {
+    critical: 'Past Due',
+    emergent: 'Upcoming',
+    satisfactory: 'Completed'
+};
+
+// Show a detail table popup for a CR inspection category
+function showCategoryTable(category) {
+    const label = categoryLabels[category] || category;
+    const today = new Date();
+    const rows = [];
+
+    Object.entries(bridgeLayers).forEach(([bars, marker]) => {
+        const bridge = marker.bridgeData;
+        if (!bridge) return;
+
+        // Apply same filters as calculateMaxBridgeCounts
+        if (!activeDistricts[bridge.district]) return;
+
+        if (currentSearchQuery.length > 0) {
+            const barsUpper = (bridge.bars_number || '').toUpperCase();
+            const name = (bridge.bridge_name || '').toUpperCase();
+            const isNumericSearch = /^\d/.test(currentSearchQuery);
+            const matchesBars = isNumericSearch ? barsUpper.startsWith(currentSearchQuery) : barsUpper.includes(currentSearchQuery);
+            const matchesName = isNumericSearch ? name.startsWith(currentSearchQuery) : name.includes(currentSearchQuery);
+            if (!matchesBars && !matchesName) return;
+        }
+
+        if (typeof attributesFilterState !== 'undefined' && attributesFilterState.active) {
+            if (!bridgePassesAttributesFilter(bridge)) return;
+        }
+
+        if (sliderValues.sufficiency < 100) {
+            const calcSuff = getSufficiencyRating(bridge);
+            if (calcSuff == null) return;
+            const suffThreshold = sliderValues.sufficiency / 100 * 9;
+            if (sufficiencyMode === 'lte') {
+                if (calcSuff > suffThreshold) return;
+            } else {
+                if (calcSuff < suffThreshold) return;
+            }
+        }
+
+        // Must match the requested category
+        if (getBridgeCategory(bridge) !== category) return;
+
+        // Get filtered inspections and find the worst one
+        const inspections = inspectionsData[bridge.bars_number];
+        if (!inspections) return;
+
+        let relevant = inspections;
+        if (selectedInspectionTypes.length > 0) {
+            relevant = inspections.filter(i => selectedInspectionTypes.includes(i.type));
+        }
+        if (selectedMonths.length > 0) {
+            relevant = relevant.filter(i => {
+                const d = parseDateString(i.due);
+                return d && selectedMonths.includes(d.getMonth() + 1);
+            });
+        }
+        if (relevant.length === 0) return;
+
+        // Find worst inspection (most overdue / closest due)
+        let worstInsp = null;
+        let worstDays = -Infinity;
+        relevant.forEach(insp => {
+            const due = parseDateString(insp.due);
+            if (!due) return;
+            const days = Math.floor((today - due) / 86400000);
+            if (days > worstDays) {
+                worstDays = days;
+                worstInsp = insp;
+            }
+        });
+
+        if (!worstInsp) return;
+
+        const worstDue = parseDateString(worstInsp.due);
+        rows.push({
+            district: bridge.district,
+            bars: bridge.bars_number,
+            barsLink: bridge.bars_hyperlink || '#',
+            name: bridge.bridge_name || '',
+            lat: bridge.latitude,
+            lng: bridge.longitude,
+            type: worstInsp.type,
+            interval: worstInsp.interval || 24,
+            dueDate: worstDue ? worstDue.getTime() : 0,
+            dueDateStr: worstInsp.due || '',
+            days: worstDays
+        });
+    });
+
+    // Sort by district (ascending), then days past due descending (worst first)
+    rows.sort((a, b) => a.district - b.district || b.days - a.days);
+
+    // Store rows and state globally for sorting/rebuilding
+    window._categoryTableRows = rows;
+    window._categoryTableCategory = category;
+    window._categoryTableSortCol = 'district';
+    window._categoryTableSortAsc = true;
+
+    _buildCategoryTablePopup(rows, category);
+}
+
+// Rebuild the category table body from sorted rows
+function _buildCategoryTablePopup(rows, category) {
+    const label = categoryLabels[category] || category;
+    const daysColHeader = category === 'critical' ? 'Days Past Due' : 'Due';
+
+    // Determine sort arrow indicators
+    const sortCol = window._categoryTableSortCol;
+    const sortAsc = window._categoryTableSortAsc;
+    function arrow(col) {
+        if (col !== sortCol) return '';
+        return sortAsc ? ' &#9650;' : ' &#9660;';
+    }
+
+    // Build table rows
+    let tableRows = '';
+    rows.forEach((r, i) => {
+        const titleCaseName = (r.name || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+        const mapsLink = `https://www.google.com/maps?q=${r.lat},${r.lng}`;
+        let daysText, rowStyle = '';
+        if (r.days > 0) {
+            daysText = `${r.days}`;
+            rowStyle = 'background: rgba(220, 38, 38, 0.2); color: #FCA5A5;';
+        } else if (r.days === 0) {
+            daysText = 'Today';
+            rowStyle = 'background: rgba(245, 158, 11, 0.15);';
+        } else {
+            daysText = `in ${Math.abs(r.days)} days`;
+            rowStyle = '';
+        }
+
+        tableRows += `<tr style="${rowStyle} border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
+            <td style="padding: 6px 8px; text-align: center;">${i + 1}</td>
+            <td style="padding: 6px 8px;">${r.district}</td>
+            <td style="padding: 6px 8px;"><a href="${r.barsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${r.bars}</a></td>
+            <td style="padding: 6px 8px;"><a href="${mapsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${titleCaseName}</a></td>
+            <td style="padding: 6px 8px;">${r.type}</td>
+            <td style="padding: 6px 8px; text-align: center;">${r.interval}</td>
+            <td style="padding: 6px 8px; text-align: center;">${r.dueDateStr}</td>
+            <td style="padding: 6px 8px; text-align: center;">${daysText}</td>
+        </tr>`;
+    });
+
+    // Remove any existing category table popup
+    const existing = document.getElementById('category-table-popup');
+    if (existing) existing.remove();
+
+    // Build plain-text table for email body
+    const emailLines = rows.map((r, i) => {
+        const n = (r.name || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+        let d = r.days > 0 ? `${r.days} days past due` : r.days === 0 ? 'Due today' : `in ${Math.abs(r.days)} days`;
+        return `${i + 1}. D${r.district} | ${r.bars} | ${n} | ${r.type} | Due: ${r.dueDateStr} | ${d}`;
+    });
+    const emailSubject = encodeURIComponent(`SpanBase ${label} — ${rows.length} Bridge${rows.length !== 1 ? 's' : ''}`);
+    const emailBody = encodeURIComponent(`${label} — ${rows.length} Bridge${rows.length !== 1 ? 's' : ''}\n\n` + emailLines.join('\n'));
+    const mailtoHref = `mailto:?subject=${emailSubject}&body=${emailBody}`;
+
+    const thStyle = 'padding: 8px; cursor: pointer; user-select: none;';
+
+    const popup = document.createElement('div');
+    popup.id = 'category-table-popup';
+    popup.className = 'info-panel';
+    popup.style.cssText = 'max-width: 95vw; width: fit-content; resize: none; cursor: default;';
+    popup.innerHTML = `
+        <div class="info-header" id="category-table-header" style="cursor: default;">
+            <h3>${label} — ${rows.length} Bridge${rows.length !== 1 ? 's' : ''}</h3>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <a href="${mailtoHref}" title="Share via email"
+                   style="background: rgba(255,184,28,0.2); border: 1px solid var(--wvdoh-yellow); color: var(--wvdoh-yellow); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 9pt; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 4px;">&#9993; Email</a>
+                <button onclick="exportCategoryCSV(window._categoryTableRows, '${label.replace(/\s+/g, '')}')"
+                        style="background: rgba(255,184,28,0.2); border: 1px solid var(--wvdoh-yellow); color: var(--wvdoh-yellow); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 9pt; font-weight: 600;">Export CSV</button>
+                <button class="close-btn" onclick="document.getElementById('category-table-popup').remove()">&#215;</button>
+            </div>
+        </div>
+        <div class="info-content" style="cursor: default;">
+            <table style="border-collapse: collapse; font-size: 10pt; color: #fff; white-space: nowrap; cursor: text;">
+                <thead>
+                    <tr style="background: rgba(0, 40, 85, 0.3); border-bottom: 2px solid #FFB81C;">
+                        <th style="${thStyle} text-align: center; cursor: default;">#</th>
+                        <th style="${thStyle} text-align: left;" onclick="sortCategoryTable('district')">District${arrow('district')}</th>
+                        <th style="${thStyle} text-align: left;" onclick="sortCategoryTable('bars')">BARS${arrow('bars')}</th>
+                        <th style="${thStyle} text-align: left;" onclick="sortCategoryTable('name')">Bridge Name${arrow('name')}</th>
+                        <th style="${thStyle} text-align: left;" onclick="sortCategoryTable('type')">Type${arrow('type')}</th>
+                        <th style="${thStyle} text-align: center;" onclick="sortCategoryTable('interval')">Interval${arrow('interval')}</th>
+                        <th style="${thStyle} text-align: center;" onclick="sortCategoryTable('dueDate')">Due Date${arrow('dueDate')}</th>
+                        <th style="${thStyle} text-align: center;" onclick="sortCategoryTable('days')">${daysColHeader}${arrow('days')}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${tableRows}
+                </tbody>
+            </table>
+        </div>
+    `;
+
+    document.body.appendChild(popup);
+    makeDraggable(popup, document.getElementById('category-table-header'));
+}
+
+// Sort the category table by a column and rebuild
+function sortCategoryTable(col) {
+    const rows = window._categoryTableRows;
+    if (!rows) return;
+
+    // Toggle direction if same column, otherwise default ascending (days defaults descending)
+    if (window._categoryTableSortCol === col) {
+        window._categoryTableSortAsc = !window._categoryTableSortAsc;
+    } else {
+        window._categoryTableSortCol = col;
+        window._categoryTableSortAsc = col === 'days' ? false : true;
+    }
+
+    const asc = window._categoryTableSortAsc;
+    rows.sort((a, b) => {
+        let va = a[col], vb = b[col];
+        if (typeof va === 'string') {
+            va = va.toLowerCase(); vb = (vb || '').toLowerCase();
+            if (va < vb) return asc ? -1 : 1;
+            if (va > vb) return asc ? 1 : -1;
+            return 0;
+        }
+        return asc ? va - vb : vb - va;
+    });
+
+    _buildCategoryTablePopup(rows, window._categoryTableCategory);
+}
+
+// Export CR category table data as CSV
+function exportCategoryCSV(rows, label) {
+    if (!rows || rows.length === 0) return;
+
+    const headers = '#,District,BARS,Bridge Name,Type,Interval,Due Date,Days Past Due';
+    const csvRows = rows.map((r, i) => {
+        const titleCaseName = (r.name || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+        let daysText;
+        if (r.days > 0) daysText = r.days;
+        else if (r.days === 0) daysText = 0;
+        else daysText = -Math.abs(r.days);
+        return `${i + 1},${r.district},"${r.bars}","${titleCaseName}",${r.type},${r.interval},${r.dueDateStr},${daysText}`;
+    });
+
+    const csv = headers + '\n' + csvRows.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+
+    const today = new Date();
+    const dateStr = today.getFullYear() + '-' +
+        String(today.getMonth() + 1).padStart(2, '0') + '-' +
+        String(today.getDate()).padStart(2, '0');
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `SpanBase_${label}_${dateStr}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
 
 // Check if condition sliders are active
@@ -3334,7 +3701,7 @@ function updateCountReport() {
     const hasAttributes = typeof attributesFilterState !== 'undefined' && attributesFilterState.active;
 
     // Determine which button set we need
-    const needFull = hasCondition || inspectionFiltersActive || hasAttributes;
+    const needFull = hasCondition || inspectionFiltersActive || hasAttributes || currentSearchQuery.length > 0;
     const targetMode = needFull ? 'full' : 'default';
 
     // Build/rebuild buttons if mode changed
@@ -3347,9 +3714,11 @@ function updateCountReport() {
     const elCritical = document.getElementById('count-critical');
     const elEmergent = document.getElementById('count-emergent');
     const elSatisfactory = document.getElementById('count-satisfactory');
+    const elCompleted = document.getElementById('count-completed');
     if (elCritical) elCritical.textContent = maxCounts.critical;
     if (elEmergent) elEmergent.textContent = maxCounts.emergent;
     if (elSatisfactory) elSatisfactory.textContent = maxCounts.satisfactory;
+    if (elCompleted) elCompleted.textContent = maxCounts.completed;
     document.getElementById('count-na').textContent = maxCounts.na;
     document.getElementById('count-hubdata').textContent = maxCounts.hubdata;
     document.getElementById('count-total').textContent = maxCounts.total;
@@ -3357,6 +3726,7 @@ function updateCountReport() {
     const btnCritical = document.getElementById('btn-critical');
     const btnEmergent = document.getElementById('btn-emergent');
     const btnSatisfactory = document.getElementById('btn-satisfactory');
+    const btnCompleted = document.getElementById('btn-completed');
     const btnNA = document.getElementById('btn-na');
     const btnHubdata = document.getElementById('btn-hubdata');
 
@@ -3365,7 +3735,7 @@ function updateCountReport() {
         if (maxCounts.critical > 0) {
             btnCritical.disabled = false;
             btnCritical.style.cursor = 'pointer';
-            btnCritical.title = 'Click to isolate Critical bridges';
+            btnCritical.title = inspectionFiltersActive ? 'Click to isolate Past Due bridges' : 'Click to isolate Critical bridges';
             btnCritical.style.opacity = countCategoryState.critical ? '1.0' : '0.5';
         } else {
             btnCritical.style.opacity = '0.3';
@@ -3377,7 +3747,7 @@ function updateCountReport() {
         if (maxCounts.emergent > 0) {
             btnEmergent.disabled = false;
             btnEmergent.style.cursor = 'pointer';
-            btnEmergent.title = 'Click to isolate Emergent bridges';
+            btnEmergent.title = inspectionFiltersActive ? 'Click to isolate Upcoming bridges' : 'Click to isolate Emergent bridges';
             btnEmergent.style.opacity = countCategoryState.emergent ? '1.0' : '0.5';
         } else {
             btnEmergent.style.opacity = '0.3';
@@ -3385,11 +3755,23 @@ function updateCountReport() {
             btnEmergent.disabled = true;
         }
     }
+    if (btnCompleted) {
+        if (maxCounts.completed > 0) {
+            btnCompleted.disabled = false;
+            btnCompleted.style.cursor = 'pointer';
+            btnCompleted.title = 'Click to isolate Completed bridges';
+            btnCompleted.style.opacity = countCategoryState.completed ? '1.0' : '0.5';
+        } else {
+            btnCompleted.style.opacity = '0.3';
+            btnCompleted.style.cursor = 'not-allowed';
+            btnCompleted.disabled = true;
+        }
+    }
     if (btnSatisfactory) {
         if (maxCounts.satisfactory > 0) {
             btnSatisfactory.disabled = false;
             btnSatisfactory.style.cursor = 'pointer';
-            btnSatisfactory.title = 'Click to isolate Satisfactory bridges';
+            btnSatisfactory.title = inspectionFiltersActive ? 'Click to isolate Completed bridges' : 'Click to isolate Satisfactory bridges';
             btnSatisfactory.style.opacity = countCategoryState.satisfactory ? '1.0' : '0.5';
         } else {
             btnSatisfactory.style.opacity = '0.3';
@@ -3440,7 +3822,7 @@ function updateCountReport() {
 
     // Show box only when a filter is actually active (sliders moved, not just evaluation mode)
     const countReport = document.getElementById('countReport');
-    const filtersEngaged = hasCondition || inspectionFiltersActive || hasAttributes;
+    const filtersEngaged = hasCondition || inspectionFiltersActive || hasAttributes || currentSearchQuery.length > 0;
     if (filtersEngaged && maxCounts.total > 0 && countReport.style.display !== 'block') {
         countReport.style.display = 'block';
         const header = document.getElementById('countReportHeader');
@@ -3449,83 +3831,33 @@ function updateCountReport() {
             countReport.dataset.draggable = 'true';
         }
         positionCountReportOutsideBridges();
+    } else if (!filtersEngaged && countReport.style.display === 'block') {
+        closeCountReport();
     }
 }
 
 // Position count report outside visible bridge bounding box
 function positionCountReportOutsideBridges() {
     const countReport = document.getElementById('countReport');
-    if (!countReport || !map) return;
-    
-    // Get bounding box of all visible bridges
-    let minLat = Infinity, maxLat = -Infinity;
-    let minLng = Infinity, maxLng = -Infinity;
-    let hasVisible = false;
-    
-    Object.values(bridgeLayers).forEach(marker => {
-        if (marker.options.fillOpacity > 0) {
-            const latlng = marker.getLatLng();
-            minLat = Math.min(minLat, latlng.lat);
-            maxLat = Math.max(maxLat, latlng.lat);
-            minLng = Math.min(minLng, latlng.lng);
-            maxLng = Math.max(maxLng, latlng.lng);
-            hasVisible = true;
-        }
-    });
-    
-    if (!hasVisible) {
-        // Default position
-        countReport.style.top = '145px';
-        countReport.style.left = '50%';
-        countReport.style.transform = 'translateX(-50%)';
-        return;
-    }
-    
-    // Convert to screen coordinates
-    const topLeft = map.latLngToContainerPoint([maxLat, minLng]);
-    const bottomRight = map.latLngToContainerPoint([minLat, maxLng]);
-    
-    const boxWidth = 350;
-    const boxHeight = 320;
-    const padding = 15;
-    
-    const mapWidth = map.getContainer().clientWidth;
-    const mapHeight = map.getContainer().clientHeight;
-    
-    let left, top;
-    
-    // Try right side first
-    if (bottomRight.x + boxWidth + padding * 2 < mapWidth) {
-        left = bottomRight.x + padding;
-        top = Math.max(145, topLeft.y);
-    }
-    // Try left side
-    else if (topLeft.x - boxWidth - padding * 2 > 0) {
-        left = topLeft.x - boxWidth - padding;
-        top = Math.max(145, topLeft.y);
-    }
-    // Try below
-    else if (bottomRight.y + boxHeight + padding < mapHeight) {
-        left = (mapWidth / 2) - (boxWidth / 2);
-        top = bottomRight.y + padding;
-    }
-    // Try above
-    else if (topLeft.y - boxHeight - padding > 0) {
-        left = (mapWidth / 2) - (boxWidth / 2);
-        top = topLeft.y - boxHeight - padding;
-    }
-    // Default center-top
-    else {
-        left = (mapWidth / 2) - (boxWidth / 2);
-        top = 145;
-    }
-    
-    // Clamp to screen
-    left = Math.max(10, Math.min(left, mapWidth - boxWidth - 10));
-    top = Math.max(10, Math.min(top, mapHeight - boxHeight - 10));
-    
-    countReport.style.top = top + 'px';
-    countReport.style.left = left + 'px';
+    if (!countReport) return;
+
+    // Align CR bottom with Districts box bottom, 10px gap to its left
+    const legend = document.querySelector('.legend');
+    if (!legend) return;
+
+    const legendRect = legend.getBoundingClientRect();
+    const mapRect = map.getContainer().getBoundingClientRect();
+
+    // CR is position:absolute inside the map container
+    // Bottom-align: CR bottom = legend bottom (relative to map container)
+    const legendBottom = legendRect.bottom - mapRect.top;
+    const crWidth = 240;
+    const crHeight = countReport.offsetHeight || 320;
+    const top = legendBottom - crHeight;
+    const left = legendRect.left - mapRect.left - crWidth - 10; // 10px gap
+
+    countReport.style.top = Math.max(10, top) + 'px';
+    countReport.style.left = Math.max(10, left) + 'px';
     countReport.style.transform = 'none';
 }
 
@@ -3534,6 +3866,7 @@ function updateButtonStyles() {
     const buttons = [
         { id: 'btn-critical',     key: 'critical',     color: '#dc2626' },
         { id: 'btn-emergent',     key: 'emergent',     color: '#F97316' },
+        { id: 'btn-completed',    key: 'completed',    color: '#10B981' },
         { id: 'btn-satisfactory', key: 'satisfactory', color: '#10b981' },
         { id: 'btn-na',           key: 'na',           color: '#6b7280' },
         { id: 'btn-hubdata',      key: 'hubdata',      color: '#22c55e' }
@@ -3555,6 +3888,10 @@ function updateButtonStyles() {
 
 // Toggle category visibility
 window.toggleCountCategory = function(category) {
+    // Close the category detail table popup if open
+    const catPopup = document.getElementById('category-table-popup');
+    if (catPopup) catPopup.remove();
+
     const hasCondition = hasConditionSlidersActive();
     // HUB Data, N/A, and Total buttons always accessible; condition buttons require sliders
     if (category !== 'hubdata' && category !== 'na' && category !== 'total') {
@@ -3566,6 +3903,7 @@ window.toggleCountCategory = function(category) {
         countCategoryState.critical = true;
         countCategoryState.emergent = true;
         countCategoryState.satisfactory = true;
+        countCategoryState.completed = true;
         countCategoryState.na = false;
         countCategoryState.hubdata = false;
         countCategoryState.total = true;
@@ -3576,6 +3914,7 @@ window.toggleCountCategory = function(category) {
             countCategoryState.critical = true;
             countCategoryState.emergent = true;
             countCategoryState.satisfactory = true;
+            countCategoryState.completed = true;
             countCategoryState.na = false;
             countCategoryState.hubdata = false;
             countCategoryState.total = true;
@@ -3585,6 +3924,7 @@ window.toggleCountCategory = function(category) {
             countCategoryState.critical = false;
             countCategoryState.emergent = false;
             countCategoryState.satisfactory = false;
+            countCategoryState.completed = false;
             countCategoryState.na = false;
             countCategoryState.hubdata = true;
             countCategoryState.total = false;
@@ -3595,12 +3935,13 @@ window.toggleCountCategory = function(category) {
         // Check for double-click (click same button twice)
         if (categoryClickState[category] === 1 &&
             !countCategoryState.critical && !countCategoryState.emergent &&
-            !countCategoryState.satisfactory && !countCategoryState.na &&
+            !countCategoryState.satisfactory && !countCategoryState.completed && !countCategoryState.na &&
             countCategoryState[category]) {
             // Double-click detected - show all
             countCategoryState.critical = true;
             countCategoryState.emergent = true;
             countCategoryState.satisfactory = true;
+            countCategoryState.completed = true;
             countCategoryState.na = false;
             countCategoryState.hubdata = false;
             countCategoryState.total = true;
@@ -3610,6 +3951,7 @@ window.toggleCountCategory = function(category) {
             countCategoryState.critical = false;
             countCategoryState.emergent = false;
             countCategoryState.satisfactory = false;
+            countCategoryState.completed = false;
             countCategoryState.na = false;
             countCategoryState.hubdata = false;
             countCategoryState.total = false;
@@ -3624,6 +3966,8 @@ window.toggleCountCategory = function(category) {
     // Reapply filters
     updateBridgeSizes();
     applyCountCategoryFilter();
+    updateButtonStyles();
+    updateProjectRings();
 
     // Auto-zoom
     setTimeout(autoZoomToFilteredBridges, 100);
@@ -3670,7 +4014,53 @@ function applyCountCategoryFilter() {
                 marker.setRadius(baseSize);
                 marker.setStyle({
                     fillColor: '#22c55e',
-                    fillOpacity: 0.85,
+                    fillOpacity: 1,
+                    opacity: 1
+                });
+                if (!marker._map) marker.addTo(map);
+            } else {
+                if (marker._map) marker.remove();
+            }
+        });
+        return;
+    }
+
+    // HUB Data theme mode — show only HUB bridges as green dots
+    if (hubDataMode === 2) {
+        const baseSize = getPointSize();
+        Object.entries(bridgeLayers).forEach(([bars, marker]) => {
+            const bridge = marker.bridgeData;
+            if (!bridge) return;
+
+            if (!activeDistricts[bridge.district]) {
+                if (marker._map) marker.remove();
+                return;
+            }
+
+            if (currentSearchQuery.length > 0) {
+                const barsUpper = (bridge.bars_number || '').toUpperCase();
+                const name = (bridge.bridge_name || '').toUpperCase();
+                const isNumericSearch = /^\d/.test(currentSearchQuery);
+                const matchesBars = isNumericSearch ? barsUpper.startsWith(currentSearchQuery) : barsUpper.includes(currentSearchQuery);
+                const matchesName = isNumericSearch ? name.startsWith(currentSearchQuery) : name.includes(currentSearchQuery);
+                if (!matchesBars && !matchesName) {
+                    if (marker._map) marker.remove();
+                    return;
+                }
+            }
+
+            if (typeof attributesFilterState !== 'undefined' && attributesFilterState.active) {
+                if (!bridgePassesAttributesFilter(bridge)) {
+                    if (marker._map) marker.remove();
+                    return;
+                }
+            }
+
+            if (projectsData[bars]) {
+                marker.setRadius(baseSize);
+                marker.setStyle({
+                    fillColor: '#22c55e',
+                    fillOpacity: 1,
                     opacity: 1
                 });
                 if (!marker._map) marker.addTo(map);
@@ -3686,7 +4076,7 @@ function applyCountCategoryFilter() {
 
     // Check if a specific category is isolated via CR (NA or condition category)
     const hasIsolation = countCategoryState.na ||
-        (!countCategoryState.critical || !countCategoryState.emergent || !countCategoryState.satisfactory);
+        (!countCategoryState.critical || !countCategoryState.emergent || !countCategoryState.satisfactory || !countCategoryState.completed);
 
     // Apply category filtering when condition sliders active, in maintenance mode, attributes filter, or CR isolation
     if (!hasCondition && !evaluationActive && !hasAttributes && !hasIsolation) return;
@@ -3694,9 +4084,11 @@ function applyCountCategoryFilter() {
     // Check if showing all (total state or all categories on except N/A)
     const showingAll = countCategoryState.total ||
                        (countCategoryState.critical && countCategoryState.emergent &&
-                        countCategoryState.satisfactory && !countCategoryState.na);
+                        countCategoryState.completed && countCategoryState.satisfactory && !countCategoryState.na);
 
     if (showingAll) return;
+
+    const toShow = [];
 
     Object.values(bridgeLayers).forEach(marker => {
         const bridge = marker.bridgeData;
@@ -3737,27 +4129,45 @@ function applyCountCategoryFilter() {
 
         if (category === 'critical' && countCategoryState.critical) shouldShow = true;
         if (category === 'emergent' && countCategoryState.emergent) shouldShow = true;
+        if (category === 'completed' && countCategoryState.completed) shouldShow = true;
         if (category === 'satisfactory' && countCategoryState.satisfactory) shouldShow = true;
         if (category === 'na' && countCategoryState.na) shouldShow = true;
 
         if (shouldShow) {
-            // Add to map if not already there
-            if (!marker._map) {
-                const size = evaluationActive ? getEvaluationSize(bridge, getPointSize()) : getPointSize();
-                marker.setRadius(size);
-                marker.setStyle({
-                    fillOpacity: 0.85,
-                    fillColor: getBridgeColor(bridge),
-                    opacity: 1
-                });
-                marker.addTo(map);
+            const color = inspectionFiltersActive ? getInspectionColor(bridge) : getBridgeColor(bridge);
+            let zPriority;
+            if (inspectionFiltersActive) {
+                // Inspection: green(completed)=0, orange(upcoming)=1, red(past-due)=2
+                zPriority = 0;
+                if (color.startsWith('hsl(0')) zPriority = 2;
+                else if (color.startsWith('hsl(')) zPriority = 1;
+            } else {
+                // Maintenance: best rating first, worst last
+                const ratings = [bridge.deck_rating, bridge.superstructure_rating,
+                    bridge.substructure_rating, bridge.bearings_rating, bridge.joints_rating]
+                    .filter(r => typeof r === 'number' && !isNaN(r) && r >= 1 && r <= 9);
+                zPriority = ratings.length > 0 ? Math.min(...ratings) : 10;
+                zPriority = 10 - zPriority; // invert so worst = highest priority
             }
+            toShow.push({ marker, bridge, color, zPriority });
         } else {
-            // Remove from map if it's there
-            if (marker._map) {
-                marker.remove();
-            }
+            if (marker._map) marker.remove();
         }
+    });
+
+    // Sort: lowest priority first, highest last (worst drawn on top)
+    toShow.sort((a, b) => a.zPriority - b.zPriority);
+
+    toShow.forEach(({ marker, bridge, color }) => {
+        const size = evaluationActive ? getEvaluationSize(bridge, getPointSize()) : getPointSize();
+        marker.setRadius(size);
+        marker.setStyle({
+            fillOpacity: 1,
+            fillColor: color,
+            opacity: 1
+        });
+        if (!marker._map) marker.addTo(map);
+        marker.bringToFront();
     });
 }
 
@@ -3765,6 +4175,7 @@ function applyCountCategoryFilter() {
 window.closeCountReport = function() {
     document.getElementById('countReport').style.display = 'none';
     crButtonMode = null; // force rebuild on next open
+    crButtonInspection = null;
 };
 
 // ========================================
@@ -3858,21 +4269,35 @@ function addPulseClass(ring) {
 }
 
 window.toggleProjectRings = function() {
-    projectRingsVisible = !projectRingsVisible;
+    // Three-state cycle: 0 (off/blue) → 1 (on/yellow) → 2 (theme/green) → 0
+    const prevMode = hubDataMode;
+    hubDataMode = (hubDataMode + 1) % 3;
+    projectRingsVisible = hubDataMode === 1;
 
     const btn = document.getElementById('projectToggle');
-    if (projectRingsVisible) {
-        btn.textContent = 'HUB Data: ON';
-        btn.classList.add('active');
-        updateProjectRings();
-    } else {
-        btn.textContent = 'HUB Data: OFF';
-        btn.classList.remove('active');
-        // Remove all rings from map
+    btn.classList.remove('active', 'theme');
+
+    if (hubDataMode === 0) {
+        // Off: remove rings, restore normal bridge rendering
         Object.values(projectRingLayers).forEach(ring => {
             if (ring._map) ring.remove();
         });
+        if (prevMode === 2) {
+            updateBridgeSizes();
+            applyCountCategoryFilter();
+        }
+    } else if (hubDataMode === 1) {
+        // On: show rings + HUB Data radial menu option
+        btn.classList.add('active');
+        updateProjectRings();
+    } else {
+        // Theme: green HUB dots only, no rings
+        btn.classList.add('theme');
+        Object.values(projectRingLayers).forEach(ring => {
+            if (ring._map) ring.remove();
+        });
+        updateBridgeSizes();
+        applyCountCategoryFilter();
     }
-
 };
 
