@@ -351,7 +351,7 @@
             right: 0;
             height: 40px;
             background: rgba(0, 40, 85, 0.95);
-            border-top: 2px solid var(--wvdoh-yellow);
+            border-top: 1px solid var(--wvdoh-yellow);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -898,6 +898,77 @@
             color: #fff;
         }
 
+        /* Box Select */
+        #box-select-rect {
+            position: fixed;
+            border: 2px dashed var(--wvdoh-yellow);
+            background: rgba(255, 184, 28, 0.1);
+            z-index: 10001;
+            pointer-events: none;
+        }
+
+        #box-select-popup {
+            position: fixed;
+            z-index: 10002;
+            background: var(--wvdoh-blue);
+            border: 1px solid var(--wvdoh-yellow);
+            border-radius: 8px;
+            padding: 12px 16px;
+            transform: translateX(-50%);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+            font-size: 9pt;
+            color: #fff;
+        }
+
+        #box-select-popup button {
+            padding: 5px 12px;
+            border-radius: 4px;
+            border: 1px solid var(--wvdoh-yellow);
+            background: rgba(255, 184, 28, 0.15);
+            color: var(--wvdoh-yellow);
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 8pt;
+        }
+
+        #box-select-popup button:hover {
+            background: rgba(255, 184, 28, 0.3);
+        }
+
+        #box-filter-indicator {
+            position: fixed;
+            bottom: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10000;
+            background: var(--wvdoh-blue);
+            border: 1px solid var(--wvdoh-yellow);
+            border-radius: 6px;
+            padding: 6px 14px;
+            font-size: 9pt;
+            color: var(--wvdoh-yellow);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        }
+
+        #box-filter-indicator button {
+            padding: 3px 10px;
+            border-radius: 4px;
+            border: 1px solid var(--wvdoh-yellow);
+            background: rgba(255, 184, 28, 0.15);
+            color: var(--wvdoh-yellow);
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 8pt;
+        }
+
+        #box-filter-indicator button:hover {
+            background: rgba(255, 184, 28, 0.3);
+        }
+
         /* Fixed-width category detail table popups */
         #category-table-popup {
             width: 920px;
@@ -934,7 +1005,7 @@
     </div>
     
     <div class="last-updated">
-        Last updated 02/07/26 05:13 PM
+        Last updated 02/07/26 06:09 PM
     </div>
     
     <div class="header">

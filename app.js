@@ -14,6 +14,7 @@ let hoveredBridge = null;
 let radialMenu = null;
 let nameTooltip = null;
 let currentSearchQuery = ''; // Track search state
+let boxExcludedBars = new Set(); // Bridges excluded by box select
 
 // Inspection system
 let inspectionsData = {}; // BARS number -> array of inspections
@@ -144,6 +145,8 @@ async function init() {
             closeAllMenus();
         });
         
+        initBoxSelect();
+
         document.getElementById('loading').style.display = 'none';
         console.log('✓ SpanBase ready');
         
@@ -1215,6 +1218,11 @@ function updateBridgeSizes() {
             }
         }
 
+        // Box select exclusion
+        if (shouldShow && boxExcludedBars.has(bridge.bars_number)) {
+            shouldShow = false;
+        }
+
         // HIDE BRIDGES WITH N/A (gray color #6b7280) unless N/A is toggled on or search is active
         if (shouldShow && evaluationActive && color.toLowerCase() === '#6b7280') {
             if (!countCategoryState.na && currentSearchQuery.length === 0) {
@@ -2192,6 +2200,13 @@ function updateBridgesForInspection() {
                 if (marker._map) marker.remove();
                 return;
             }
+        }
+
+        // Box select exclusion
+        if (boxExcludedBars.has(bars)) {
+            marker.setStyle({ fillOpacity: 0, opacity: 0 });
+            if (marker._map) marker.remove();
+            return;
         }
 
         const inspections = inspectionsData[bars];
@@ -4864,11 +4879,82 @@ const tourSteps = [
             map.fitBounds(wvBounds, { padding: [100, 50], maxZoom: 8 });
         }
     },
-    // Step 7: HUB Data interactive — user cycles the button
+    // Step 7: Box Select — search for route 79, teach Ctrl+drag
+    {
+        target: '#map',
+        title: 'Box Select',
+        text: 'We just searched for "route 79" — notice some results aren\'t on I-79.\n\nHold Ctrl and drag a box around the bridges you don\'t want, then click Exclude to remove them. You can also use Include to keep only selected bridges.\n\nTry it now! A Reset button appears at the bottom when a box filter is active.',
+        position: 'bottom',
+        tooltipFixed: { bottom: 20 },
+        onEnter: function() {
+            // Close panels
+            const condPanel = document.getElementById('evaluationPanel');
+            const attrPanel = document.getElementById('attributesPanel');
+            condPanel.classList.remove('open', 'behind');
+            attrPanel.classList.remove('open', 'ontop');
+
+            // Reset any lingering evaluation state from prior steps
+            evaluationActive = false;
+            currentMode = 'default';
+
+            // Reset count category state so stale isolation doesn't hide results
+            countCategoryState.critical = true;
+            countCategoryState.emergent = true;
+            countCategoryState.satisfactory = true;
+            countCategoryState.completed = true;
+            countCategoryState.na = false;
+            countCategoryState.hubdata = false;
+            countCategoryState.total = false;
+            Object.keys(categoryClickState).forEach(k => categoryClickState[k] = 0);
+
+            // Clear any box selection from prior use
+            boxExcludedBars.clear();
+            const ind = document.getElementById('box-filter-indicator');
+            if (ind) ind.remove();
+
+            // Type "route 79" into search and trigger it
+            const searchInput = document.getElementById('searchInput');
+            searchInput.value = 'route 79';
+            currentSearchQuery = 'ROUTE 79';
+            updateBridgeSizes();
+            zoomToSearchResults();
+
+            // Raise map above overlay so Ctrl+drag works
+            document.getElementById('map').style.zIndex = '12000';
+            // Disable panning/zoom so only Ctrl+drag and clicks work
+            map.dragging.disable();
+            map.scrollWheelZoom.disable();
+            map.doubleClickZoom.disable();
+            map.touchZoom.disable();
+            map.keyboard.disable();
+        },
+        onExit: function() {
+            // Clear search
+            document.getElementById('searchInput').value = '';
+            currentSearchQuery = '';
+
+            // Clear box selection
+            boxExcludedBars.clear();
+            const ind = document.getElementById('box-filter-indicator');
+            if (ind) ind.remove();
+
+            // Reset map z-index and re-enable interactions
+            document.getElementById('map').style.zIndex = '';
+            map.dragging.enable();
+            map.scrollWheelZoom.enable();
+            map.doubleClickZoom.enable();
+            map.touchZoom.enable();
+            map.keyboard.enable();
+
+            applySearch();
+            updateBridgeSizes();
+        }
+    },
+    // Step 8: HUB Data interactive — user cycles the button
     {
         target: '#projectToggle',
         title: 'HUB Data Button',
-        text: 'This button cycles through three modes:\n\n\u2022 Blue (off) \u2014 Normal bridge view, no project data.\n\u2022 Yellow \u2014 Green rings appear around bridges with project data. All bridges stay visible so you can see current conditions AND financials side-by-side.\n\u2022 Green \u2014 Only HUB data bridges remain. Everything else hides.\n\nGive it a click and watch it cycle!',
+        text: 'This button cycles through three modes:\n\n\u2022 Blue (off) \u2014 Normal bridge view, no project data.\n\u2022 Yellow \u2014 Green rings appear around bridges with project data. All bridges stay visible so you can see current conditions AND financials side-by-side.\n\u2022 Green \u2014 Only HUB data bridges remain.\n\nGive it a click and watch it cycle!',
         position: 'left',
         onEnter: function() {
             const condPanel = document.getElementById('evaluationPanel');
@@ -4894,7 +4980,7 @@ const tourSteps = [
             }
         }
     },
-    // Step 8: Guided exercise — bad joints, good sufficiency
+    // Step 9: Guided exercise — bad joints, good sufficiency
     {
         target: '#eval-sliders-wrapper',
         title: 'Try It \u2014 Bad Joints, Good Bridges',
@@ -4928,7 +5014,7 @@ const tourSteps = [
         },
         onExit: null
     },
-    // Step 9: Count Report — shows the exercise results, interactive
+    // Step 10: Count Report — shows the exercise results, interactive
     {
         target: '#countReport',
         title: 'Count Report',
@@ -4995,7 +5081,7 @@ const tourSteps = [
             updateBridgeSizes();
         }
     },
-    // Step 10: Wrap-up — dead center of screen
+    // Step 11: Wrap-up — dead center of screen
     {
         target: null,
         title: "You're Ready!",
@@ -5096,6 +5182,27 @@ function restoreTourState() {
 
     // Reset HUB button z-index in case we quit during step 7
     document.getElementById('projectToggle').style.zIndex = '';
+
+    // Clear search in case we quit during step 10
+    document.getElementById('searchInput').value = '';
+    currentSearchQuery = '';
+
+    // Clear box select in case we quit during step 10
+    boxExcludedBars.clear();
+    const boxInd = document.getElementById('box-filter-indicator');
+    if (boxInd) boxInd.remove();
+
+    // Reset count category state
+    countCategoryState.critical = true;
+    countCategoryState.emergent = true;
+    countCategoryState.satisfactory = true;
+    countCategoryState.completed = true;
+    countCategoryState.na = false;
+    countCategoryState.hubdata = false;
+    countCategoryState.total = false;
+    Object.keys(categoryClickState).forEach(k => categoryClickState[k] = 0);
+
+    applySearch();
 
     tourPreState = null;
 }
@@ -5336,5 +5443,192 @@ function onTourKeydown(e) {
 function onTourResize() {
     if (!tourActive) return;
     showTourStep(tourStep);
+}
+
+// ═══════════════════════════════════════════════════════
+// BOX SELECT — Ctrl+drag to select bridges, include/exclude
+// ═══════════════════════════════════════════════════════
+
+function initBoxSelect() {
+    const mapContainer = document.getElementById('map');
+    let isSelecting = false;
+    let startX, startY;
+    let selectionBox = null;
+
+    mapContainer.addEventListener('mousedown', function(e) {
+        if (!e.ctrlKey || e.button !== 0) return;
+        if (tourActive) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+        map.dragging.disable();
+        map.boxZoom.disable();
+
+        isSelecting = true;
+        startX = e.clientX;
+        startY = e.clientY;
+
+        selectionBox = document.createElement('div');
+        selectionBox.id = 'box-select-rect';
+        selectionBox.style.left = startX + 'px';
+        selectionBox.style.top = startY + 'px';
+        document.body.appendChild(selectionBox);
+    });
+
+    document.addEventListener('mousemove', function(e) {
+        if (!isSelecting || !selectionBox) return;
+        const x = Math.min(e.clientX, startX);
+        const y = Math.min(e.clientY, startY);
+        const w = Math.abs(e.clientX - startX);
+        const h = Math.abs(e.clientY - startY);
+        selectionBox.style.left = x + 'px';
+        selectionBox.style.top = y + 'px';
+        selectionBox.style.width = w + 'px';
+        selectionBox.style.height = h + 'px';
+    });
+
+    document.addEventListener('mouseup', function(e) {
+        if (!isSelecting) return;
+        isSelecting = false;
+        map.dragging.enable();
+        map.boxZoom.enable();
+
+        const endX = e.clientX;
+        const endY = e.clientY;
+        const rect = {
+            left: Math.min(startX, endX),
+            top: Math.min(startY, endY),
+            right: Math.max(startX, endX),
+            bottom: Math.max(startY, endY)
+        };
+
+        if (selectionBox) {
+            selectionBox.remove();
+            selectionBox = null;
+        }
+
+        // Ignore tiny accidental drags
+        if (rect.right - rect.left < 10 || rect.bottom - rect.top < 10) return;
+
+        // Find visible bridges inside the rectangle
+        const selected = [];
+        Object.entries(bridgeLayers).forEach(([bars, marker]) => {
+            if (!marker._map) return;
+            const opts = marker.options;
+            if (opts.fillOpacity === 0 || opts.opacity === 0) return;
+            const pt = map.latLngToContainerPoint(marker.getLatLng());
+            const mapEl = document.getElementById('map');
+            const mapRect = mapEl.getBoundingClientRect();
+            const screenX = mapRect.left + pt.x;
+            const screenY = mapRect.top + pt.y;
+            if (screenX >= rect.left && screenX <= rect.right &&
+                screenY >= rect.top && screenY <= rect.bottom) {
+                selected.push(bars);
+            }
+        });
+
+        if (selected.length === 0) return;
+
+        showBoxSelectPopup(selected, rect);
+    });
+}
+
+function showBoxSelectPopup(selectedBars, rect) {
+    // Remove existing popup
+    const existing = document.getElementById('box-select-popup');
+    if (existing) existing.remove();
+
+    const popup = document.createElement('div');
+    popup.id = 'box-select-popup';
+
+    // Position near the center of the selection rectangle
+    const cx = (rect.left + rect.right) / 2;
+    const cy = rect.bottom + 10;
+    popup.style.left = cx + 'px';
+    popup.style.top = cy + 'px';
+
+    popup.innerHTML = `
+        <div style="font-weight: 600; margin-bottom: 8px; color: var(--wvdoh-yellow);">${selectedBars.length} bridge${selectedBars.length !== 1 ? 's' : ''} selected</div>
+        <div style="display: flex; gap: 6px;">
+            <button id="box-select-include" style="flex: 1;">Include</button>
+            <button id="box-select-exclude" style="flex: 1;">Exclude</button>
+            <button id="box-select-cancel" style="flex: 1;">Cancel</button>
+        </div>
+    `;
+
+    document.body.appendChild(popup);
+
+    // Clamp to viewport
+    const popRect = popup.getBoundingClientRect();
+    if (popRect.right > window.innerWidth - 10) {
+        popup.style.left = (window.innerWidth - popRect.width - 10) + 'px';
+    }
+    if (popRect.bottom > window.innerHeight - 10) {
+        popup.style.top = (rect.top - popRect.height - 10) + 'px';
+    }
+
+    document.getElementById('box-select-include').addEventListener('click', function() {
+        // Include = exclude everything EXCEPT the selected bridges
+        const allVisible = [];
+        Object.entries(bridgeLayers).forEach(([bars, marker]) => {
+            if (!marker._map) return;
+            const opts = marker.options;
+            if (opts.fillOpacity === 0 || opts.opacity === 0) return;
+            allVisible.push(bars);
+        });
+        allVisible.forEach(bars => {
+            if (!selectedBars.includes(bars)) {
+                boxExcludedBars.add(bars);
+            }
+        });
+        popup.remove();
+        updateBridgeSizes();
+        showBoxFilterIndicator();
+    });
+
+    document.getElementById('box-select-exclude').addEventListener('click', function() {
+        selectedBars.forEach(bars => boxExcludedBars.add(bars));
+        popup.remove();
+        updateBridgeSizes();
+        showBoxFilterIndicator();
+    });
+
+    document.getElementById('box-select-cancel').addEventListener('click', function() {
+        popup.remove();
+    });
+
+    // Close on click outside
+    setTimeout(() => {
+        document.addEventListener('mousedown', function closePopup(e) {
+            if (!popup.contains(e.target)) {
+                popup.remove();
+                document.removeEventListener('mousedown', closePopup);
+            }
+        });
+    }, 50);
+}
+
+function showBoxFilterIndicator() {
+    let indicator = document.getElementById('box-filter-indicator');
+    if (boxExcludedBars.size === 0) {
+        if (indicator) indicator.remove();
+        return;
+    }
+    if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.id = 'box-filter-indicator';
+        document.body.appendChild(indicator);
+    }
+    indicator.innerHTML = `
+        <span>${boxExcludedBars.size} bridge${boxExcludedBars.size !== 1 ? 's' : ''} filtered</span>
+        <button onclick="clearBoxSelect()">Reset</button>
+    `;
+}
+
+function clearBoxSelect() {
+    boxExcludedBars.clear();
+    const indicator = document.getElementById('box-filter-indicator');
+    if (indicator) indicator.remove();
+    updateBridgeSizes();
 }
 
