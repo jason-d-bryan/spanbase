@@ -86,15 +86,17 @@
             letter-spacing: 2px;
         }
         
-        .header .subtitle { 
-            font-size: 11pt; 
+        .header .subtitle {
+            font-size: 11pt;
             color: #fff;
             margin-bottom: 3px;
+            text-align: center;
         }
-        
+
         .header .email {
             font-size: 10pt;
             margin-bottom: 15px;
+            text-align: center;
         }
         
         .header .email a {
@@ -413,7 +415,7 @@
         .legend {
             position: absolute; bottom: 40px; right: 20px; z-index: 1000;
             background: var(--box-bg); padding: 15px 20px;
-            border-radius: 8px; border: 1px solid var(--box-border); 
+            border-radius: 8px; border: 1px solid var(--wvdoh-yellow);
             max-width: 250px;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
             backdrop-filter: blur(10px);
@@ -590,12 +592,11 @@
             justify-content: center; cursor: pointer; pointer-events: auto;
             transition: all 0.2s;
             box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
-            z-index: 5;
         }
         .radial-option:hover {
             background: var(--wvdoh-light-blue);
             transform: translate(-50%, -50%) scale(1.1);
-            z-index: 6;
+            z-index: 9 !important;
         }
         .radial-option .label {
             font-size: 12pt; font-weight: bold;
@@ -799,6 +800,131 @@
             border: 1px solid var(--wvdoh-blue);
             color: var(--wvdoh-blue);
         }
+
+        /* ===== GUIDED TOUR ===== */
+        #tour-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 11999;
+            pointer-events: auto;
+        }
+
+        #tour-spotlight {
+            position: fixed;
+            z-index: 12000;
+            border-radius: 8px;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.7);
+            pointer-events: none;
+            transition: all 0.3s ease;
+        }
+
+        #tour-spotlight.no-target {
+            top: 50% !important;
+            left: 50% !important;
+            width: 0px !important;
+            height: 0px !important;
+            border-radius: 50%;
+        }
+
+        #tour-tooltip {
+            position: fixed;
+            z-index: 12001;
+            background: var(--wvdoh-blue);
+            border: 2px solid var(--wvdoh-yellow);
+            border-radius: 8px;
+            padding: 16px 20px;
+            max-width: 340px;
+            color: #fff;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+            transition: opacity 0.25s ease;
+            pointer-events: auto;
+        }
+
+        #tour-tooltip h4 {
+            color: var(--wvdoh-yellow);
+            margin: 0 0 8px 0;
+            font-size: 12pt;
+        }
+
+        #tour-tooltip p {
+            margin: 0 0 12px 0;
+            font-size: 10pt;
+            line-height: 1.5;
+            color: rgba(255,255,255,0.9);
+        }
+
+        .tour-nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .tour-counter {
+            font-size: 9pt;
+            color: rgba(255,255,255,0.5);
+        }
+
+        .tour-btn {
+            padding: 6px 14px;
+            border-radius: 4px;
+            border: 1px solid var(--wvdoh-yellow);
+            background: rgba(255,184,28,0.15);
+            color: var(--wvdoh-yellow);
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 9pt;
+            line-height: 1;
+            box-sizing: border-box;
+        }
+
+        .tour-btn:hover {
+            background: rgba(255,184,28,0.3);
+        }
+
+        #tour-help-btn {
+            background: transparent;
+            border: none;
+            color: var(--wvdoh-yellow);
+            font-size: 9pt;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            padding: 0;
+            text-decoration: underline;
+            letter-spacing: 0.5px;
+        }
+
+        #tour-help-btn:hover {
+            color: #fff;
+        }
+
+        /* Fixed-width category detail table popups */
+        #category-table-popup {
+            width: 920px;
+            max-width: 95vw;
+        }
+        #category-table-popup .info-header {
+            padding: 8px 14px;
+        }
+        #category-table-popup .info-header h3 {
+            font-size: 11pt;
+            white-space: nowrap;
+        }
+        #category-table-popup .info-content table {
+            width: 100%;
+            table-layout: fixed;
+        }
+        #category-table-popup .info-content table .col-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 0;
+        }
+
+        /* Raise info panels and detail tables above tour overlay so they're usable */
+        body.tour-active .info-panel {
+            z-index: 12002;
+        }
     </style>
 </head>
 <body>
@@ -808,12 +934,11 @@
     </div>
     
     <div class="last-updated">
-        Last updated 06/02/26 10:10 PM
+        Last updated 02/07/26 05:13 PM
     </div>
     
     <div class="header">
         <div class="header-overlay"></div>
-        <div style="text-align: center; margin-bottom: 2px;"><a href="https://docs.google.com/document/d/1l2MDlr4IAMorvgPfq9pRG9IYsRgGcxOb/edit?usp=sharing&ouid=112943824375355142692&rtpof=true&sd=true" target="_blank" style="color: #fff; font-size: 10pt; text-decoration: none; letter-spacing: 0.5px;">User Manual</a></div>
         <h1>SpanBase</h1>
         <div class="subtitle">Operations Division – 0066</div>
         <div class="email"><a href="mailto:jason.d.bryan@wv.gov">jason.d.bryan@wv.gov</a></div>
@@ -833,6 +958,11 @@
             <h3>Condition Filter</h3>
         </div>
         <div class="panel-body">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 6px;">
+                <a href="https://docs.google.com/document/d/1l2MDlr4IAMorvgPfq9pRG9IYsRgGcxOb/edit?usp=sharing&ouid=112943824375355142692&rtpof=true&sd=true" target="_blank" style="color: var(--wvdoh-yellow); font-size: 9pt; font-weight: 600; text-decoration: underline; letter-spacing: 0.5px;">User Manual</a>
+                <span style="color: rgba(255,255,255,0.3);">|</span>
+                <button id="tour-help-btn" onclick="startTour()" title="Take a guided tour">Tutorial</button>
+            </div>
             <div class="section-switcher">
                 <button class="section-btn maintenance active" onclick="switchSection('maintenance')">Maintenance</button>
                 <button class="section-btn inspection" onclick="switchSection('inspection')">Inspection</button>
@@ -877,9 +1007,7 @@
                 <p class="panel-instructions">
                     Adjust sliders to weight bridge components. Higher values emphasize worse conditions. Missing ratings (N/A) are excluded from calculations.
                 </p>
-                <p class="panel-instructions" style="font-size: 9pt; font-style: italic; color: rgba(255,255,255,0.6); margin-top: -10px; margin-bottom: 20px;">
-                    Note: Colors show worst available rating. Bridges without any ratings appear gray.
-                </p>
+                <div id="eval-sliders-wrapper">
                 <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 15px;">
                 <div class="slider-group">
                 <label>Deck</label>
@@ -928,8 +1056,9 @@
                     <span class="slider-value" id="value-sufficiency">100%</span>
                 </div>
             </div>
+            </div><!-- /eval-sliders-wrapper -->
             </div>
-            
+
             <!-- Reset Button -->
             <div style="margin-top: 15px; text-align: center;">
                 <button onclick="resetCurrentTab()" style="padding: 8px 20px; font-size: 10pt; background: var(--wvdoh-yellow); border: none; border-radius: 4px; cursor: pointer; font-weight: 600; color: var(--wvdoh-blue);">Reset</button>
@@ -938,7 +1067,7 @@
             
             <!-- WVDOT Logo (outside scrollable area, stays at bottom) -->
             <div style="padding: 15px 10px; text-align: center; flex-shrink: 0;">
-                <img src="wvdot-logo.png" alt="WVDOT Logo" style="width: calc(50% - 20px); max-width: 175px; height: auto; display: block; margin: 0 auto;">
+                <a href="https://transportation.wv.gov/highways/maintenance/Pages/default.aspx" target="_blank"><img src="wvdot-logo.png" alt="WVDOT Logo" style="width: calc(50% - 20px); max-width: 175px; height: auto; display: block; margin: 0 auto; cursor: pointer;"></a>
             </div>
         </div>
     </div>

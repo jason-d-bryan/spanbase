@@ -199,17 +199,13 @@ function addBridges() {
             if (options.opacity === 0 || options.fillOpacity === 0) {
                 return;
             }
-            const point = map.latLngToContainerPoint(e.latlng);
-            const nearest = getNearestNeighborDist(point, bridge.bars_number);
-
-            if (nearest > 40) {
-                showNameTooltip(e, bridge);    // Name + BARS (well separated)
-            } else if (nearest > 15) {
-                showBarsTooltip(e, bridge);    // BARS only (moderate spacing)
-            } else if (currentZoom <= 9) {
-                showDistrictTooltip(e, bridge); // District name (only at zoom 8-9)
+            if (currentZoom >= 12) {
+                showNameTooltip(e, bridge);      // Full name + BARS
+            } else if (currentZoom >= 10) {
+                showBarsTooltip(e, bridge);      // BARS only
+            } else {
+                showDistrictTooltip(e, bridge);  // District
             }
-            // Zoom 10+ and packed tight: no tooltip
         });
 
         marker.on('mouseout', function() {
@@ -230,8 +226,8 @@ function addBridges() {
             L.DomEvent.stopPropagation(e);
             removeNameTooltip();
 
-            // HUB Data isolation mode: go directly to project info
-            if (countCategoryState.hubdata) {
+            // HUB Data isolation mode or theme mode: go directly to project info
+            if (countCategoryState.hubdata || hubDataMode === 2) {
                 showProjectInfo(bridge);
                 return;
             }
@@ -355,7 +351,7 @@ function showNameTooltip(e, bridge) {
         ).join(' ');
     };
     
-    const bridgeName = titleCase(bridge.bridge_name);
+    const bridgeName = titleCase(cleanBridgeName(bridge.bridge_name));
     const bars = bridge.bars_number;
     
     const point = map.latLngToContainerPoint(e.latlng);
@@ -405,9 +401,9 @@ function showRadialMenu(latlng, bridge) {
     title.style.top = (point.y - 277) + 'px'; // Moved up 7px more
     
     // Convert bridge name to title case
-    const bridgeName = bridge.bridge_name || 'Unknown';
+    const bridgeName = cleanBridgeName(bridge.bridge_name);
     const titleCaseName = bridgeName.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-    
+
     title.innerHTML = `
         <div class="menu-title-text">
             ${titleCaseName}<br>
@@ -437,31 +433,35 @@ function showRadialMenu(latlng, bridge) {
     const center = L.DomUtil.create('div', 'radial-center', menu);
     center.innerHTML = ``; // Empty, logo is background
     
-    // Build nodes - include HUB Data only when project rings are active
-    const nodes = hubDataMode === 1 ? [
-        { angle: 270, label: 'Narrative', action: () => showNarratives(bridge) },        // Top (12 o'clock)
-        { angle: 330, label: 'Condition', action: () => showCondition(bridge) },         // Top-right
-        { angle: 30,  label: 'HUB Data', action: () => showProjectInfo(bridge) },        // Right
-        { angle: 90,  label: 'Geometry', action: () => showGeometry(bridge) },           // Bottom
-        { angle: 150, label: 'Attributes', action: () => showAttributes(bridge) },       // Bottom-left
-        { angle: 210, label: 'Inspection', action: () => showInspectionsPopup(bridge) }  // Left
+    // Build nodes — ordered bottom-to-top for z-index stacking
+    // Stacking (front to back): DOH logo > Inspection > Narrative > Condition > HUB Data > Geometry > Attributes
+    // HUB Data button only shown if bridge has project data (green ring)
+    const hasHubData = hubDataMode === 1 && projectsData[bridge.bars_number];
+    const nodes = hasHubData ? [
+        { angle: 150, label: 'Attributes',  action: () => showAttributes(bridge),       z: 1 },  // Bottom-left
+        { angle: 90,  label: 'Geometry',     action: () => showGeometry(bridge),         z: 2 },  // Bottom
+        { angle: 30,  label: 'HUB Data',     action: () => showProjectInfo(bridge),      z: 3 },  // Bottom-right
+        { angle: 330, label: 'Condition',    action: () => showCondition(bridge),        z: 4 },  // Top-right
+        { angle: 210, label: 'Narrative',    action: () => showNarratives(bridge),       z: 5 },  // Top-left
+        { angle: 270, label: 'Inspection',   action: () => showInspectionsPopup(bridge), z: 6 },  // Top (12 o'clock)
     ] : [
-        { angle: 270, label: 'Narrative', action: () => showNarratives(bridge) },        // Top (12 o'clock)
-        { angle: 342, label: 'Condition', action: () => showCondition(bridge) },         // Top-right
-        { angle: 54,  label: 'Geometry', action: () => showGeometry(bridge) },           // Bottom-right
-        { angle: 126, label: 'Attributes', action: () => showAttributes(bridge) },       // Bottom
-        { angle: 198, label: 'Inspection', action: () => showInspectionsPopup(bridge) }  // Bottom-left
+        { angle: 126, label: 'Attributes',  action: () => showAttributes(bridge),       z: 1 },  // Bottom-left
+        { angle: 54,  label: 'Geometry',     action: () => showGeometry(bridge),         z: 2 },  // Bottom-right
+        { angle: 342, label: 'Condition',    action: () => showCondition(bridge),        z: 4 },  // Top-right
+        { angle: 198, label: 'Narrative',    action: () => showNarratives(bridge),       z: 5 },  // Top-left
+        { angle: 270, label: 'Inspection',   action: () => showInspectionsPopup(bridge), z: 6 },  // Top (12 o'clock)
     ];
-    
+
     nodes.forEach(node => {
         const rad = node.angle * Math.PI / 180;
         const distance = 105; // Brought in 5px closer
-        
+
         const option = L.DomUtil.create('div', 'radial-option', menu);
         option.style.left = (distance * Math.cos(rad)) + 'px';
         option.style.top = (distance * Math.sin(rad)) + 'px';
+        option.style.zIndex = node.z;
         option.innerHTML = `<span class="label">${node.label}</span>`;
-        
+
         option.onclick = function(e) {
             e.stopPropagation();
             node.action();
@@ -815,9 +815,9 @@ function createInfoPanel(title, content, bridge) {
     if (existing) existing.remove();
     
     // Convert bridge name to title case
-    const bridgeName = bridge.bridge_name || 'Unknown';
+    const bridgeName = cleanBridgeName(bridge.bridge_name);
     const titleCaseName = bridgeName.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-    
+
     const panel = L.DomUtil.create('div', 'info-panel');
     panel.id = 'infoPanel';
     panel.innerHTML = `
@@ -1058,6 +1058,12 @@ function getWorstConditionColor(bridge) {
 
 function getPointSize() {
     return pointSizes[currentZoom] || 8;
+}
+
+// Clean bridge name: strip parenthetical abbreviations like (CSWB), (SWB), etc.
+function cleanBridgeName(name) {
+    if (!name) return 'Unknown';
+    return name.replace(/\s*\([A-Z]{2,}\)\s*/g, ' ').trim();
 }
 
 function getEvaluationSize(bridge, baseSize) {
@@ -1929,6 +1935,18 @@ window.applyInspectionFilters = function() {
     if (selectedInspectionTypes.length > 0 || selectedMonths.length > 0) {
         inspectionFiltersActive = true;
         currentMode = 'inspection';
+
+        // Disengage HUB Data mode when entering inspection view
+        if (hubDataMode > 0) {
+            hubDataMode = 0;
+            projectRingsVisible = false;
+            const hubBtn = document.getElementById('projectToggle');
+            if (hubBtn) hubBtn.classList.remove('active', 'theme');
+            Object.values(projectRingLayers).forEach(ring => {
+                if (ring._map) ring.remove();
+            });
+        }
+
         updateStatusBar();
         updateBridgesForInspection();
     } else {
@@ -1987,6 +2005,38 @@ window.resetInspectionTab = function() {
 
 // Smart reset - detects which tab is active and calls appropriate function
 window.resetCurrentTab = function() {
+    closeAllMenus();
+
+    // Turn off HUB Data toggle if active
+    if (hubDataMode > 0) {
+        hubDataMode = 0;
+        projectRingsVisible = false;
+        const hubBtn = document.getElementById('projectToggle');
+        if (hubBtn) {
+            hubBtn.classList.remove('active', 'theme');
+        }
+        Object.values(projectRingLayers).forEach(ring => {
+            if (ring._map) ring.remove();
+        });
+    }
+
+    // Reset all CR category state to defaults
+    countCategoryState.critical = true;
+    countCategoryState.emergent = true;
+    countCategoryState.satisfactory = true;
+    countCategoryState.completed = true;
+    countCategoryState.na = false;
+    countCategoryState.hubdata = false;
+    countCategoryState.total = true;
+    Object.keys(categoryClickState).forEach(k => categoryClickState[k] = 0);
+
+    // Clear showNA state
+    if (attributesFilterState.showNA) {
+        attributesFilterState.showNA = false;
+        const naCheckbox = document.getElementById('show-na-bridges');
+        if (naCheckbox) naCheckbox.checked = false;
+    }
+
     const inspectionSection = document.getElementById('inspectionSection');
     const maintenanceSection = document.getElementById('maintenanceSection');
 
@@ -2000,6 +2050,9 @@ window.resetCurrentTab = function() {
     if (typeof attributesFilterState !== 'undefined' && attributesFilterState.active) {
         resetAttributesFilter();
     }
+
+    closeCountReport();
+    syncHubButton();
 };
 
 // Ctrl+Shift+D to toggle debug panel
@@ -2013,44 +2066,10 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-// ESC key to reset — closes radial menus, CR window, HUB toggle, and mimics reset button
+// ESC key to reset — delegates to resetCurrentTab which handles everything
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
-        closeAllMenus();
-
-        // Turn off HUB Data toggle if active
-        if (hubDataMode > 0) {
-            hubDataMode = 0;
-            projectRingsVisible = false;
-            const btn = document.getElementById('projectToggle');
-            if (btn) {
-                btn.classList.remove('active', 'theme');
-            }
-            Object.values(projectRingLayers).forEach(ring => {
-                if (ring._map) ring.remove();
-            });
-        }
-
-        // Reset all CR category state to defaults
-        countCategoryState.critical = true;
-        countCategoryState.emergent = true;
-        countCategoryState.satisfactory = true;
-        countCategoryState.completed = true;
-        countCategoryState.na = false;
-        countCategoryState.hubdata = false;
-        countCategoryState.total = true;
-        hubDataMode = 0;
-        Object.keys(categoryClickState).forEach(k => categoryClickState[k] = 0);
-
-        // Clear showNA state before tab reset so the first updateBridgeSizes pass is clean
-        if (attributesFilterState.showNA) {
-            attributesFilterState.showNA = false;
-            const naCheckbox = document.getElementById('show-na-bridges');
-            if (naCheckbox) naCheckbox.checked = false;
-        }
-
         resetCurrentTab();
-        closeCountReport();
     }
 });
 
@@ -2971,11 +2990,15 @@ function buildQuantileTables() {
         // Build 101-point table (positions 0-100)
         const table = new Array(101);
         table[0] = 0;
-        for (let i = 1; i <= 99; i++) {
+        for (let i = 1; i <= 97; i++) {
             const idx = Math.min(Math.round((i / 100) * (values.length - 1)), values.length - 1);
-            table[i] = values[idx];
+            table[i] = Math.round(values[idx]);
         }
-        // Position 100 = hardcoded max (so filter "active" checks work)
+        // Smooth ramp from p97 data value to hardcoded max over positions 98-100
+        // Prevents a massive jump at the last slider tick
+        const p97val = table[97];
+        table[98] = Math.round(p97val + (cfg.max - p97val) * 0.33);
+        table[99] = Math.round(p97val + (cfg.max - p97val) * 0.66);
         table[100] = cfg.max;
         quantileTables[key] = table;
     });
@@ -3151,7 +3174,7 @@ function buildCountReportButtons(mode) {
     const labelStyle = 'color: #fff; font-weight: 600; font-size: 9pt;';
     const countStyle = 'color: #fff; font-size: 12pt; font-weight: 700;';
 
-    let html = '<div style="font-size: 8pt; color: rgba(255,255,255,0.5); margin-bottom: 4px; text-align: center; font-style: italic;">Click to isolate</div>';
+    let html = '';
 
     if (mode === 'full') {
         if (inspectionFiltersActive) {
@@ -3196,21 +3219,33 @@ function buildCountReportButtons(mode) {
                     <div style="${dotStyle} background: #dc2626;"></div>
                     <span style="${labelStyle}">Critical</span>
                 </div>
-                <span style="${countStyle}" id="count-critical">0</span>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="${countStyle}" id="count-critical">0</span>
+                    <span onclick="event.stopPropagation(); showMaintenanceCategoryTable('critical')"
+                          style="cursor:pointer; font-size:9pt; opacity:0.6;" title="View table">☰</span>
+                </div>
             </button>`;
             html += `<button id="btn-emergent" onclick="toggleCountCategory('emergent')" style="${btnStyle}">
                 <div style="display: flex; align-items: center; gap: 8px;">
                     <div style="${dotStyle} background: #F97316;"></div>
                     <span style="${labelStyle}">Emergent</span>
                 </div>
-                <span style="${countStyle}" id="count-emergent">0</span>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="${countStyle}" id="count-emergent">0</span>
+                    <span onclick="event.stopPropagation(); showMaintenanceCategoryTable('emergent')"
+                          style="cursor:pointer; font-size:9pt; opacity:0.6;" title="View table">☰</span>
+                </div>
             </button>`;
             html += `<button id="btn-satisfactory" onclick="toggleCountCategory('satisfactory')" style="${btnStyle}">
                 <div style="display: flex; align-items: center; gap: 8px;">
                     <div style="${dotStyle} background: #10b981;"></div>
                     <span style="${labelStyle}">Satisfactory</span>
                 </div>
-                <span style="${countStyle}" id="count-satisfactory">0</span>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="${countStyle}" id="count-satisfactory">0</span>
+                    <span onclick="event.stopPropagation(); showMaintenanceCategoryTable('satisfactory')"
+                          style="cursor:pointer; font-size:9pt; opacity:0.6;" title="View table">☰</span>
+                </div>
             </button>`;
         }
     }
@@ -3424,6 +3459,7 @@ const categoryLabels = {
 
 // Show a detail table popup for a CR inspection category
 function showCategoryTable(category) {
+    const savedPos = _saveCategoryPopupPos();
     const label = categoryLabels[category] || category;
     const today = new Date();
     const rows = [];
@@ -3498,7 +3534,7 @@ function showCategoryTable(category) {
             district: bridge.district,
             bars: bridge.bars_number,
             barsLink: bridge.bars_hyperlink || '#',
-            name: bridge.bridge_name || '',
+            name: cleanBridgeName(bridge.bridge_name),
             lat: bridge.latitude,
             lng: bridge.longitude,
             type: worstInsp.type,
@@ -3519,6 +3555,7 @@ function showCategoryTable(category) {
     window._categoryTableSortAsc = true;
 
     _buildCategoryTablePopup(rows, category);
+    _restoreCategoryPopupPos(savedPos);
 }
 
 // Rebuild the category table body from sorted rows
@@ -3555,7 +3592,7 @@ function _buildCategoryTablePopup(rows, category) {
             <td style="padding: 6px 8px; text-align: center;">${i + 1}</td>
             <td style="padding: 6px 8px;">${r.district}</td>
             <td style="padding: 6px 8px;"><a href="${r.barsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${r.bars}</a></td>
-            <td style="padding: 6px 8px;"><a href="${mapsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${titleCaseName}</a></td>
+            <td class="col-name" style="padding: 6px 8px;"><a href="${mapsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${titleCaseName}</a></td>
             <td style="padding: 6px 8px;">${r.type}</td>
             <td style="padding: 6px 8px; text-align: center;">${r.interval}</td>
             <td style="padding: 6px 8px; text-align: center;">${r.dueDateStr}</td>
@@ -3582,11 +3619,32 @@ function _buildCategoryTablePopup(rows, category) {
     const popup = document.createElement('div');
     popup.id = 'category-table-popup';
     popup.className = 'info-panel';
-    popup.style.cssText = 'max-width: 95vw; width: fit-content; resize: none; cursor: default;';
+    popup.style.cssText = 'max-width: 95vw; resize: none; cursor: default;';
+    // Build category nav buttons — show all 3, grey out current + empty
+    const inspCatNav = [
+        { key: 'critical', label: 'Past Due', color: '#dc2626', countId: 'count-critical' },
+        { key: 'emergent', label: 'Upcoming', color: '#F97316', countId: 'count-emergent' },
+        { key: 'satisfactory', label: 'Completed', color: '#10B981', countId: 'count-satisfactory' }
+    ];
+    const inspNavBtnStyle = 'padding: 3px 10px; border-radius: 3px; font-size: 8pt; font-weight: 600; border: none;';
+    const inspNavButtons = inspCatNav
+        .map(c => {
+            const isCurrent = c.key === category;
+            const countEl = document.getElementById(c.countId);
+            const count = countEl ? parseInt(countEl.textContent, 10) : 0;
+            const empty = isNaN(count) || count === 0;
+            if (isCurrent || empty) {
+                return `<button disabled style="${inspNavBtnStyle} background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.3); cursor: default;">${c.label}</button>`;
+            }
+            return `<button onclick="showCategoryTable('${c.key}')" style="${inspNavBtnStyle} background: ${c.color}; color: #fff; cursor: pointer;">${c.label}</button>`;
+        })
+        .join('');
+
     popup.innerHTML = `
         <div class="info-header" id="category-table-header" style="cursor: default;">
             <h3>${label} — ${rows.length} Bridge${rows.length !== 1 ? 's' : ''}</h3>
             <div style="display: flex; align-items: center; gap: 8px;">
+                ${inspNavButtons}
                 <a href="${mailtoHref}" title="Share via email"
                    style="background: rgba(255,184,28,0.2); border: 1px solid var(--wvdoh-yellow); color: var(--wvdoh-yellow); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 9pt; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 4px;">&#9993; Email</a>
                 <button onclick="exportCategoryCSV(window._categoryTableRows, '${label.replace(/\s+/g, '')}')"
@@ -3595,13 +3653,24 @@ function _buildCategoryTablePopup(rows, category) {
             </div>
         </div>
         <div class="info-content" style="cursor: default;">
-            <table style="border-collapse: collapse; font-size: 10pt; color: #fff; white-space: nowrap; cursor: text;">
+            <div style="font-size: 8pt; color: rgba(255,255,255,0.45); font-style: italic; margin-bottom: 6px;">Sorted by district. Click any column header to re-sort. Export reflects current sort order.</div>
+            <table style="border-collapse: collapse; font-size: 10pt; color: #fff; cursor: text;">
+                <colgroup>
+                    <col style="width: 35px;">
+                    <col style="width: 55px;">
+                    <col style="width: 85px;">
+                    <col>
+                    <col style="width: 100px;">
+                    <col style="width: 60px;">
+                    <col style="width: 90px;">
+                    <col style="width: 100px;">
+                </colgroup>
                 <thead>
                     <tr style="background: rgba(0, 40, 85, 0.3); border-bottom: 2px solid #FFB81C;">
                         <th style="${thStyle} text-align: center; cursor: default;">#</th>
                         <th style="${thStyle} text-align: left;" onclick="sortCategoryTable('district')">District${arrow('district')}</th>
                         <th style="${thStyle} text-align: left;" onclick="sortCategoryTable('bars')">BARS${arrow('bars')}</th>
-                        <th style="${thStyle} text-align: left;" onclick="sortCategoryTable('name')">Bridge Name${arrow('name')}</th>
+                        <th class="col-name" style="${thStyle} text-align: left;" onclick="sortCategoryTable('name')">Bridge Name${arrow('name')}</th>
                         <th style="${thStyle} text-align: left;" onclick="sortCategoryTable('type')">Type${arrow('type')}</th>
                         <th style="${thStyle} text-align: center;" onclick="sortCategoryTable('interval')">Interval${arrow('interval')}</th>
                         <th style="${thStyle} text-align: center;" onclick="sortCategoryTable('dueDate')">Due Date${arrow('dueDate')}</th>
@@ -3673,6 +3742,368 @@ function exportCategoryCSV(rows, label) {
     const a = document.createElement('a');
     a.href = url;
     a.download = `SpanBase_${label}_${dateStr}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+// ── Maintenance CR Category Detail Tables ──
+
+const maintenanceCategoryLabels = {
+    critical: 'Critical',
+    emergent: 'Emergent',
+    satisfactory: 'Satisfactory'
+};
+
+const sliderShortNames = {
+    deck: 'Deck',
+    superstructure: 'Superstructure',
+    substructure: 'Substructure',
+    bearings: 'Bearings',
+    joints: 'Joints'
+};
+
+function getMaintenanceTableTitle(category) {
+    const base = maintenanceCategoryLabels[category] || category;
+    const activeSliders = Object.entries(sliderValues)
+        .filter(([k, v]) => v > 0 && k !== 'sufficiency')
+        .map(([k]) => sliderShortNames[k] || k);
+    const components = activeSliders.length > 0 ? activeSliders.join(' / ') : 'All Ratings';
+    return `${base} — ${components}`;
+}
+
+// Save current category-table-popup position before replacing it
+function _saveCategoryPopupPos() {
+    const existing = document.getElementById('category-table-popup');
+    if (!existing) return null;
+    const rect = existing.getBoundingClientRect();
+    return { top: rect.top, left: rect.left };
+}
+
+// Apply saved position to newly created category-table-popup
+function _restoreCategoryPopupPos(pos) {
+    if (!pos) return;
+    const popup = document.getElementById('category-table-popup');
+    if (!popup) return;
+    popup.style.top = pos.top + 'px';
+    popup.style.left = pos.left + 'px';
+    popup.style.transform = 'none';
+}
+
+// Show a detail table popup for a maintenance CR category
+function showMaintenanceCategoryTable(category) {
+    const savedPos = _saveCategoryPopupPos();
+    const label = getMaintenanceTableTitle(category);
+    const currentYear = new Date().getFullYear();
+    const rows = [];
+
+    Object.entries(bridgeLayers).forEach(([bars, marker]) => {
+        const bridge = marker.bridgeData;
+        if (!bridge) return;
+
+        // Apply same filters as calculateMaxBridgeCounts
+        if (!activeDistricts[bridge.district]) return;
+
+        if (currentSearchQuery.length > 0) {
+            const barsUpper = (bridge.bars_number || '').toUpperCase();
+            const name = (bridge.bridge_name || '').toUpperCase();
+            const isNumericSearch = /^\d/.test(currentSearchQuery);
+            const matchesBars = isNumericSearch ? barsUpper.startsWith(currentSearchQuery) : barsUpper.includes(currentSearchQuery);
+            const matchesName = isNumericSearch ? name.startsWith(currentSearchQuery) : name.includes(currentSearchQuery);
+            if (!matchesBars && !matchesName) return;
+        }
+
+        if (typeof attributesFilterState !== 'undefined' && attributesFilterState.active) {
+            if (!bridgePassesAttributesFilter(bridge)) return;
+        }
+
+        if (sliderValues.sufficiency < 100) {
+            const calcSuff = getSufficiencyRating(bridge);
+            if (calcSuff == null) return;
+            const suffThreshold = sliderValues.sufficiency / 100 * 9;
+            if (sufficiencyMode === 'lte') {
+                if (calcSuff > suffThreshold) return;
+            } else {
+                if (calcSuff < suffThreshold) return;
+            }
+        }
+
+        // Must match the requested category
+        if (getBridgeCategory(bridge) !== category) return;
+
+        // Get sufficiency rating (0-100% scale)
+        const suffRaw = sufficiencyData[bridge.bars_number];
+        const suffDisplay = suffRaw != null ? suffRaw.toFixed(1) + '%' : 'N/A';
+        const suffSort = suffRaw != null ? suffRaw : -1;
+
+        const age = bridge.year_built ? currentYear - bridge.year_built : null;
+
+        rows.push({
+            district: bridge.district,
+            bars: bridge.bars_number,
+            barsLink: bridge.bars_hyperlink || '#',
+            name: cleanBridgeName(bridge.bridge_name),
+            lat: bridge.latitude,
+            lng: bridge.longitude,
+            deck: bridge.deck_rating,
+            superstructure: bridge.superstructure_rating,
+            substructure: bridge.substructure_rating,
+            bearings: bridge.bearings_rating,
+            joints: bridge.joints_rating,
+            sufficiency: suffSort,
+            sufficiencyDisplay: suffDisplay,
+            nhs: bridge.nhs || 'N/A',
+            adt: bridge.adt,
+            adtYear: bridge.adt_year,
+            age: age
+        });
+    });
+
+    // Sort by district ascending as default
+    rows.sort((a, b) => a.district - b.district);
+
+    // Store rows and state globally for sorting/rebuilding
+    window._maintTableRows = rows;
+    window._maintTableCategory = category;
+    window._maintTableLabel = label;
+    window._maintTableSortCol = 'district';
+    window._maintTableSortAsc = true;
+
+    _buildMaintenanceCategoryTablePopup(rows, category);
+    _restoreCategoryPopupPos(savedPos);
+}
+
+// Rebuild the maintenance category table popup from sorted rows
+function _buildMaintenanceCategoryTablePopup(rows, category) {
+    const label = window._maintTableLabel || (maintenanceCategoryLabels[category] || category);
+
+    const sortCol = window._maintTableSortCol;
+    const sortAsc = window._maintTableSortAsc;
+    function arrow(col) {
+        if (col !== sortCol) return '';
+        return sortAsc ? ' &#9650;' : ' &#9660;';
+    }
+
+    function ratingDisplay(val) {
+        if (val == null || isNaN(val) || val < 1 || val > 9) return 'N/A';
+        return val;
+    }
+
+    // Determine which sliders are active for column highlighting
+    const activeSliderKeys = Object.entries(sliderValues)
+        .filter(([k, v]) => v > 0 && k !== 'sufficiency')
+        .map(([k]) => k);
+
+    // Category color: red for critical, orange for emergent, green for satisfactory
+    const catColor = category === 'critical' ? '#ef4444' :
+                     category === 'emergent' ? '#F97316' : '#10B981';
+
+    // Helper: wrap rating value in highlighted color if its slider is active
+    function highlightRating(key, val) {
+        const display = ratingDisplay(val);
+        if (activeSliderKeys.includes(key)) {
+            return `<span style="color: ${catColor}; font-weight: 700;">${display}</span>`;
+        }
+        return display;
+    }
+
+    // Build table rows
+    let tableRows = '';
+    rows.forEach((r, i) => {
+        const titleCaseName = (r.name || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+        const mapsLink = `https://www.google.com/maps?q=${r.lat},${r.lng}`;
+        const nhsDisplay = r.nhs === 1 || r.nhs === '1' || (typeof r.nhs === 'string' && r.nhs.toLowerCase() === 'yes') ? 'Yes' : r.nhs === 0 || r.nhs === '0' || (typeof r.nhs === 'string' && r.nhs.toLowerCase() === 'no') ? 'No' : r.nhs || 'N/A';
+        const adtDisplay = r.adt != null ? Number(r.adt).toLocaleString() : 'N/A';
+        const adtYearDisplay = r.adtYear || 'N/A';
+        const ageDisplay = r.age != null ? r.age : 'N/A';
+
+        tableRows += `<tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
+            <td style="padding: 6px 8px; text-align: center;">${i + 1}</td>
+            <td style="padding: 6px 8px;">${r.district}</td>
+            <td style="padding: 6px 8px;"><a href="${r.barsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${r.bars}</a></td>
+            <td class="col-name" style="padding: 6px 8px;"><a href="${mapsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${titleCaseName}</a></td>
+            <td style="padding: 6px 8px; text-align: center;">${highlightRating('deck', r.deck)}</td>
+            <td style="padding: 6px 8px; text-align: center;">${highlightRating('superstructure', r.superstructure)}</td>
+            <td style="padding: 6px 8px; text-align: center;">${highlightRating('substructure', r.substructure)}</td>
+            <td style="padding: 6px 8px; text-align: center;">${highlightRating('bearings', r.bearings)}</td>
+            <td style="padding: 6px 8px; text-align: center;">${highlightRating('joints', r.joints)}</td>
+            <td style="padding: 6px 8px; text-align: center;">${r.sufficiencyDisplay}</td>
+            <td style="padding: 6px 8px; text-align: center;">${nhsDisplay}</td>
+            <td style="padding: 6px 8px; text-align: right;">${adtDisplay}</td>
+            <td style="padding: 6px 8px; text-align: center;">${adtYearDisplay}</td>
+            <td style="padding: 6px 8px; text-align: center;">${ageDisplay}</td>
+        </tr>`;
+    });
+
+    // Remove any existing popup
+    const existing = document.getElementById('category-table-popup');
+    if (existing) existing.remove();
+
+    // Build plain-text for email body
+    const emailLines = rows.map((r, i) => {
+        const n = (r.name || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+        const nhsText = r.nhs === 1 || r.nhs === '1' || (typeof r.nhs === 'string' && r.nhs.toLowerCase() === 'yes') ? 'Yes' : 'No';
+        return `${i + 1}. D${r.district} | ${r.bars} | ${n} | Deck:${ratingDisplay(r.deck)} Super:${ratingDisplay(r.superstructure)} Sub:${ratingDisplay(r.substructure)} | Suff:${r.sufficiencyDisplay} | NHS:${nhsText}`;
+    });
+    const emailSubject = encodeURIComponent(`SpanBase ${label}`);
+    const emailBody = encodeURIComponent(`${label}\n\n` + emailLines.join('\n'));
+    const mailtoHref = `mailto:?subject=${emailSubject}&body=${emailBody}`;
+
+    const csvLabel = label.replace(/[^a-zA-Z0-9]+/g, '_').replace(/_+$/, '');
+    const thStyle = 'padding: 8px; cursor: pointer; user-select: none;';
+
+    // Highlight active slider column headers
+    function thHighlight(key) {
+        return activeSliderKeys.includes(key) ? ' color: ' + catColor + '; font-weight: 700;' : '';
+    }
+
+    // Build category nav buttons (only categories not currently in view; grey out if 0 count)
+    const maintCatNav = [
+        { key: 'critical', label: 'Critical', color: '#dc2626', countId: 'count-critical' },
+        { key: 'emergent', label: 'Emergent', color: '#F97316', countId: 'count-emergent' },
+        { key: 'satisfactory', label: 'Satisfactory', color: '#10B981', countId: 'count-satisfactory' }
+    ];
+    const navBtnStyle = 'padding: 3px 10px; border-radius: 3px; font-size: 8pt; font-weight: 600; border: none;';
+    const navButtons = maintCatNav
+        .map(c => {
+            const isCurrent = c.key === category;
+            const countEl = document.getElementById(c.countId);
+            const count = countEl ? parseInt(countEl.textContent, 10) : 0;
+            const empty = isNaN(count) || count === 0;
+            if (isCurrent || empty) {
+                return `<button disabled style="${navBtnStyle} background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.3); cursor: default;">${c.label}</button>`;
+            }
+            return `<button onclick="showMaintenanceCategoryTable('${c.key}')" style="${navBtnStyle} background: ${c.color}; color: #fff; cursor: pointer;">${c.label}</button>`;
+        })
+        .join('');
+
+    const popup = document.createElement('div');
+    popup.id = 'category-table-popup';
+    popup.className = 'info-panel';
+    popup.style.cssText = 'max-width: 95vw; resize: none; cursor: default;';
+    popup.innerHTML = `
+        <div class="info-header" id="category-table-header" style="cursor: default;">
+            <h3>${label}</h3>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                ${navButtons}
+                <a href="${mailtoHref}" title="Share via email"
+                   style="background: rgba(255,184,28,0.2); border: 1px solid var(--wvdoh-yellow); color: var(--wvdoh-yellow); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 9pt; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 4px;">&#9993; Email</a>
+                <button onclick="exportMaintenanceCategoryCSV(window._maintTableRows, '${csvLabel}')"
+                        style="background: rgba(255,184,28,0.2); border: 1px solid var(--wvdoh-yellow); color: var(--wvdoh-yellow); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 9pt; font-weight: 600;">Export CSV</button>
+                <button class="close-btn" onclick="document.getElementById('category-table-popup').remove()">&#215;</button>
+            </div>
+        </div>
+        <div class="info-content" style="cursor: default;">
+            <div style="font-size: 8pt; color: rgba(255,255,255,0.45); font-style: italic; margin-bottom: 6px;">Sorted by district. Click any column header to re-sort. Export reflects current sort order.</div>
+            <table style="border-collapse: collapse; font-size: 10pt; color: #fff; cursor: text;">
+                <colgroup>
+                    <col style="width: 35px;">
+                    <col style="width: 55px;">
+                    <col style="width: 85px;">
+                    <col>
+                    <col style="width: 45px;">
+                    <col style="width: 50px;">
+                    <col style="width: 40px;">
+                    <col style="width: 65px;">
+                    <col style="width: 50px;">
+                    <col style="width: 70px;">
+                    <col style="width: 40px;">
+                    <col style="width: 60px;">
+                    <col style="width: 65px;">
+                    <col style="width: 40px;">
+                </colgroup>
+                <thead>
+                    <tr style="background: rgba(0, 40, 85, 0.3); border-bottom: 2px solid #FFB81C;">
+                        <th style="${thStyle} text-align: center; cursor: default;">#</th>
+                        <th style="${thStyle} text-align: left;" onclick="sortMaintenanceCategoryTable('district')">District${arrow('district')}</th>
+                        <th style="${thStyle} text-align: left;" onclick="sortMaintenanceCategoryTable('bars')">BARS${arrow('bars')}</th>
+                        <th class="col-name" style="${thStyle} text-align: left;" onclick="sortMaintenanceCategoryTable('name')">Bridge Name${arrow('name')}</th>
+                        <th style="${thStyle} text-align: center;${thHighlight('deck')}" onclick="sortMaintenanceCategoryTable('deck')">Deck${arrow('deck')}</th>
+                        <th style="${thStyle} text-align: center;${thHighlight('superstructure')}" onclick="sortMaintenanceCategoryTable('superstructure')">Super${arrow('superstructure')}</th>
+                        <th style="${thStyle} text-align: center;${thHighlight('substructure')}" onclick="sortMaintenanceCategoryTable('substructure')">Sub${arrow('substructure')}</th>
+                        <th style="${thStyle} text-align: center;${thHighlight('bearings')}" onclick="sortMaintenanceCategoryTable('bearings')">Bearings${arrow('bearings')}</th>
+                        <th style="${thStyle} text-align: center;${thHighlight('joints')}" onclick="sortMaintenanceCategoryTable('joints')">Joints${arrow('joints')}</th>
+                        <th style="${thStyle} text-align: center;" onclick="sortMaintenanceCategoryTable('sufficiency')">Calc. Suff.${arrow('sufficiency')}</th>
+                        <th style="${thStyle} text-align: center;" onclick="sortMaintenanceCategoryTable('nhs')">NHS${arrow('nhs')}</th>
+                        <th style="${thStyle} text-align: right;" onclick="sortMaintenanceCategoryTable('adt')">ADT${arrow('adt')}</th>
+                        <th style="${thStyle} text-align: center;" onclick="sortMaintenanceCategoryTable('adtYear')">ADT Year${arrow('adtYear')}</th>
+                        <th style="${thStyle} text-align: center;" onclick="sortMaintenanceCategoryTable('age')">Age${arrow('age')}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${tableRows}
+                </tbody>
+            </table>
+        </div>
+    `;
+
+    document.body.appendChild(popup);
+    makeDraggable(popup, document.getElementById('category-table-header'));
+}
+
+// Sort the maintenance category table by a column and rebuild
+function sortMaintenanceCategoryTable(col) {
+    const rows = window._maintTableRows;
+    if (!rows) return;
+
+    if (window._maintTableSortCol === col) {
+        window._maintTableSortAsc = !window._maintTableSortAsc;
+    } else {
+        window._maintTableSortCol = col;
+        window._maintTableSortAsc = true;
+    }
+
+    const asc = window._maintTableSortAsc;
+    rows.sort((a, b) => {
+        let va = a[col], vb = b[col];
+        if (va == null && vb == null) return 0;
+        if (va == null) return 1;
+        if (vb == null) return -1;
+        if (typeof va === 'string') {
+            va = va.toLowerCase(); vb = (vb || '').toLowerCase();
+            if (va < vb) return asc ? -1 : 1;
+            if (va > vb) return asc ? 1 : -1;
+            return 0;
+        }
+        return asc ? va - vb : vb - va;
+    });
+
+    _buildMaintenanceCategoryTablePopup(rows, window._maintTableCategory);
+}
+
+// Export maintenance CR category table data as CSV
+function exportMaintenanceCategoryCSV(rows, label) {
+    if (!rows || rows.length === 0) return;
+
+    const headers = '#,District,BARS,Bridge Name,Deck,Super,Sub,Bearings,Joints,Calc Suff,NHS,ADT,ADT Year,Age';
+    const csvRows = rows.map((r, i) => {
+        const titleCaseName = (r.name || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+        const nhsText = r.nhs === 1 || r.nhs === '1' || (typeof r.nhs === 'string' && r.nhs.toLowerCase() === 'yes') ? 'Yes' : 'No';
+        const deckVal = (r.deck != null && !isNaN(r.deck) && r.deck >= 1 && r.deck <= 9) ? r.deck : '';
+        const superVal = (r.superstructure != null && !isNaN(r.superstructure) && r.superstructure >= 1 && r.superstructure <= 9) ? r.superstructure : '';
+        const subVal = (r.substructure != null && !isNaN(r.substructure) && r.substructure >= 1 && r.substructure <= 9) ? r.substructure : '';
+        const bearVal = (r.bearings != null && !isNaN(r.bearings) && r.bearings >= 1 && r.bearings <= 9) ? r.bearings : '';
+        const jointVal = (r.joints != null && !isNaN(r.joints) && r.joints >= 1 && r.joints <= 9) ? r.joints : '';
+        const suffVal = r.sufficiency >= 0 ? r.sufficiencyDisplay : '';
+        const adtVal = r.adt != null ? r.adt : '';
+        const adtYearVal = r.adtYear || '';
+        const ageVal = r.age != null ? r.age : '';
+        return `${i + 1},${r.district},"${r.bars}","${titleCaseName}",${deckVal},${superVal},${subVal},${bearVal},${jointVal},${suffVal},${nhsText},${adtVal},${adtYearVal},${ageVal}`;
+    });
+
+    const csv = headers + '\n' + csvRows.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+
+    const today = new Date();
+    const dateStr = today.getFullYear() + '-' +
+        String(today.getMonth() + 1).padStart(2, '0') + '-' +
+        String(today.getDate()).padStart(2, '0');
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `SpanBase_Maintenance_${label}_${dateStr}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -3932,12 +4363,13 @@ window.toggleCountCategory = function(category) {
             categoryClickState.hubdata = 1;
         }
     } else {
-        // Check for double-click (click same button twice)
+        // Check for second consecutive click on same isolated category
+        const otherCats = ['critical', 'emergent', 'satisfactory', 'completed', 'na']
+            .filter(k => k !== category);
         if (categoryClickState[category] === 1 &&
-            !countCategoryState.critical && !countCategoryState.emergent &&
-            !countCategoryState.satisfactory && !countCategoryState.completed && !countCategoryState.na &&
+            otherCats.every(k => !countCategoryState[k]) &&
             countCategoryState[category]) {
-            // Double-click detected - show all
+            // Second click detected - restore all
             countCategoryState.critical = true;
             countCategoryState.emergent = true;
             countCategoryState.satisfactory = true;
@@ -4153,6 +4585,11 @@ function applyCountCategoryFilter() {
 
         if (shouldShow) {
             const color = inspectionFiltersActive ? getInspectionColor(bridge) : getBridgeColor(bridge);
+            // Don't re-show grey bridges (filtered out by sufficiency or missing ratings)
+            if (!inspectionFiltersActive && color.toLowerCase() === '#6b7280' && !countCategoryState.na) {
+                if (marker._map) marker.remove();
+                return;
+            }
             let zPriority;
             if (inspectionFiltersActive) {
                 // Inspection: green(completed)=0, orange(upcoming)=1, red(past-due)=2
@@ -4255,12 +4692,14 @@ function updateProjectRings() {
         return;
     }
 
-    const ringSize = getPointSize() + 4;
+    const baseRingSize = getPointSize() + 4;
     Object.entries(projectRingLayers).forEach(([bars, ring]) => {
-        ring.setRadius(ringSize);
+        // Match ring size to actual marker radius (handles evaluation-enlarged points)
+        const bridgeMarker = bridgeLayers[bars];
+        const markerRadius = bridgeMarker ? bridgeMarker.getRadius() : 0;
+        ring.setRadius(Math.max(baseRingSize, markerRadius + 4));
 
         // Only show ring if the bridge marker is on the map
-        const bridgeMarker = bridgeLayers[bars];
         if (bridgeMarker && bridgeMarker._map) {
             if (!ring._map) {
                 ring.addTo(map);
@@ -4318,4 +4757,584 @@ window.toggleProjectRings = function() {
         applyCountCategoryFilter();
     }
 };
+
+// ========================================
+// GUIDED TOUR
+// ========================================
+
+let tourActive = false;
+let tourStep = 0;
+let tourPreState = null; // saved UI state before tour
+
+const tourSteps = [
+    // Step 1: Welcome — dead center of screen
+    {
+        target: null,
+        title: 'Welcome to SpanBase',
+        text: 'SpanBase is a bridge management tool for WV\'s Operations Division. Use the search bar to find bridges by name, BARS number, route, or district. Let\'s walk through the key features.',
+        position: 'bottom',
+        onEnter: null,
+        onExit: null
+    },
+    // Step 2: District Legend — tooltip to the left of the legend box
+    {
+        target: '.legend',
+        title: 'District Legend',
+        text: 'Each district has its own color. Click any district name to toggle its bridges on or off. Use the "All Off" button to hide everything, then selectively enable districts you want to focus on.',
+        position: 'left',
+        onEnter: null,
+        onExit: null
+    },
+    // Step 3: Condition Filter — tooltip to the right of the tab
+    {
+        target: '#evaluationPanel .folder-tab',
+        title: 'Condition Filter',
+        text: 'This panel has two modes:\n\n\u2022 Maintenance \u2014 Sliders for Deck, Superstructure, Substructure, Bearings, and Joints. Drag a slider higher to highlight bridges with worse ratings for that component.\n\n\u2022 Inspection \u2014 Filter by inspection type and due month.\n\nAt the bottom is Calc. Sufficiency \u2014 an overall bridge health score from 0 (worst) to 100 (best). The \u2264/\u2265 Mode button toggles the direction: \u2264 shows bridges at or below your threshold (finding the worst bridges), and \u2265 shows bridges at or above it.',
+        position: 'right',
+        onEnter: function() {
+            const condPanel = document.getElementById('evaluationPanel');
+            const attrPanel = document.getElementById('attributesPanel');
+            condPanel.classList.add('open');
+            condPanel.classList.remove('behind');
+            attrPanel.classList.add('open');
+            attrPanel.classList.remove('ontop');
+        },
+        onExit: null
+    },
+    // Step 4: Attributes Filter
+    {
+        target: '#attributesPanel .folder-tab',
+        title: 'Attributes Filter',
+        text: 'Filter bridges by physical attributes:\n\n\u2022 Route / Subroute search\n\u2022 Dimension sliders (ADT, Age, Length, Width, Area)\n\u2022 NHS designation\n\u2022 On/Under bridge type checkboxes\n\nEach slider has a \u2264/\u2265 mode toggle for flexible filtering.',
+        position: 'right',
+        onEnter: function() {
+            const condPanel = document.getElementById('evaluationPanel');
+            const attrPanel = document.getElementById('attributesPanel');
+            attrPanel.classList.add('open', 'ontop');
+            condPanel.classList.add('open', 'behind');
+        },
+        onExit: null
+    },
+    // Step 5: Radial Menu explanation + teaser for next step
+    {
+        target: null,
+        title: 'Radial Menu',
+        text: 'Clicking a bridge dot opens a radial menu with up to 6 options:\n\n\u2022 Inspection \u2014 Inspection history and schedules\n\u2022 Narrative \u2014 Inspector notes and observations\n\u2022 Condition \u2014 Component condition ratings\n\u2022 Geometry \u2014 Bridge dimensions and specifications\n\u2022 Attributes \u2014 Route, classification, and features\n\u2022 HUB Data \u2014 Project data (when HUB Data is enabled)\n\nThe title bar shows the bridge name, BARS number, and links to Google Maps and AssetWise.\n\nGet ready \u2014 you\'re about to try it out for yourself!',
+        position: 'bottom',
+        onEnter: function() {
+            const condPanel = document.getElementById('evaluationPanel');
+            const attrPanel = document.getElementById('attributesPanel');
+            condPanel.classList.remove('open', 'behind');
+            attrPanel.classList.remove('open', 'ontop');
+        },
+        onExit: null
+    },
+    // Step 6: Interactive map — raise map above overlay, disable panning/zoom
+    {
+        target: '#map',
+        title: 'Try It \u2014 Click a Bridge!',
+        text: 'We\'ve zoomed into the Charleston area. Go ahead and click any bridge dot to see the radial menu in action! When you\'re done exploring, click Next to continue.',
+        tooltipFixed: { bottom: 20 },
+        onEnter: function() {
+            const condPanel = document.getElementById('evaluationPanel');
+            const attrPanel = document.getElementById('attributesPanel');
+            condPanel.classList.remove('open', 'behind');
+            attrPanel.classList.remove('open', 'ontop');
+            map.setView([38.35, -81.63], 13);
+            // Raise map above overlay so bridge dots + radial menu are clickable
+            document.getElementById('map').style.zIndex = '12000';
+            // Disable map panning/zoom — only bridge clicks should work
+            map.dragging.disable();
+            map.scrollWheelZoom.disable();
+            map.doubleClickZoom.disable();
+            map.touchZoom.disable();
+            map.boxZoom.disable();
+            map.keyboard.disable();
+        },
+        onExit: function() {
+            // Restore map z-index and re-enable interactions
+            document.getElementById('map').style.zIndex = '';
+            map.dragging.enable();
+            map.scrollWheelZoom.enable();
+            map.doubleClickZoom.enable();
+            map.touchZoom.enable();
+            map.boxZoom.enable();
+            map.keyboard.enable();
+            closeAllMenus();
+            map.fitBounds(wvBounds, { padding: [100, 50], maxZoom: 8 });
+        }
+    },
+    // Step 7: HUB Data interactive — user cycles the button
+    {
+        target: '#projectToggle',
+        title: 'HUB Data Button',
+        text: 'This button cycles through three modes:\n\n\u2022 Blue (off) \u2014 Normal bridge view, no project data.\n\u2022 Yellow \u2014 Green rings appear around bridges with project data. All bridges stay visible so you can see current conditions AND financials side-by-side.\n\u2022 Green \u2014 Only HUB data bridges remain. Everything else hides.\n\nGive it a click and watch it cycle!',
+        position: 'left',
+        onEnter: function() {
+            const condPanel = document.getElementById('evaluationPanel');
+            const attrPanel = document.getElementById('attributesPanel');
+            condPanel.classList.remove('open', 'behind');
+            attrPanel.classList.remove('open', 'ontop');
+            positionProjectToggle();
+            // Raise HUB button above overlay so it's clickable
+            document.getElementById('projectToggle').style.zIndex = '12000';
+        },
+        onExit: function() {
+            document.getElementById('projectToggle').style.zIndex = '';
+            // Reset HUB mode back to off
+            if (hubDataMode !== 0) {
+                hubDataMode = 0;
+                projectRingsVisible = false;
+                const btn = document.getElementById('projectToggle');
+                btn.classList.remove('active', 'theme');
+                Object.values(projectRingLayers).forEach(ring => {
+                    if (ring._map) ring.remove();
+                });
+                updateBridgeSizes();
+            }
+        }
+    },
+    // Step 8: Guided exercise — bad joints, good sufficiency
+    {
+        target: '#eval-sliders-wrapper',
+        title: 'Try It \u2014 Bad Joints, Good Bridges',
+        text: 'Let\'s find an interesting set of bridges: ones with bad joints but an otherwise good sufficiency rating.\n\nWe\'ve set the Joints slider to 80% and Calc. Sufficiency to 75% in \u2265 mode \u2014 meaning bridges scoring 75 or higher overall, but with joint problems.\n\nThe map now highlights these bridges. Check the Count Report that just appeared!',
+        position: 'right',
+        onEnter: function() {
+            const condPanel = document.getElementById('evaluationPanel');
+            const attrPanel = document.getElementById('attributesPanel');
+            condPanel.classList.add('open');
+            condPanel.classList.remove('behind');
+            attrPanel.classList.add('open');
+            attrPanel.classList.remove('ontop');
+            // Ensure maintenance tab is visible (not inspection)
+            var maint = document.getElementById('maintenanceSection');
+            var insp = document.getElementById('inspectionSection');
+            if (maint) maint.classList.add('active');
+            if (insp) insp.classList.remove('active');
+            // Set up the filter: Joints at 80%, Sufficiency at 75% in ≥ mode
+            sliderValues.joints = 80;
+            document.getElementById('slider-joints').value = 80;
+            document.getElementById('value-joints').textContent = '80%';
+            sliderValues.sufficiency = 75;
+            document.getElementById('slider-sufficiency').value = 75;
+            document.getElementById('value-sufficiency').textContent = '75%';
+            sufficiencyMode = 'gte';
+            const toggleBtn = document.getElementById('sufficiency-mode-toggle');
+            if (toggleBtn) toggleBtn.textContent = '\u2265 Mode';
+            evaluationActive = true;
+            currentMode = 'evaluation';
+            updateBridgeSizes();
+        },
+        onExit: null
+    },
+    // Step 9: Count Report — shows the exercise results, interactive
+    {
+        target: '#countReport',
+        title: 'Count Report',
+        text: 'The Count Report appeared automatically from our filter. It breaks down the results by condition category.\n\nClick \u2630 on any category to open its detail table. Once you\'ve opened a table, you can click the category buttons to isolate those bridges on the map. Click the same category twice to restore all.',
+        position: 'left',
+        onEnter: function() {
+            // Keep filter active, just close the panel so CR is visible
+            const condPanel = document.getElementById('evaluationPanel');
+            const attrPanel = document.getElementById('attributesPanel');
+            condPanel.classList.remove('open', 'behind');
+            attrPanel.classList.remove('open', 'ontop');
+            // Raise CR above overlay so user can interact with it
+            const cr = document.getElementById('countReport');
+            cr.style.zIndex = '12000';
+            // Gate category buttons behind first ☰ click
+            window._tourCRUnlocked = false;
+            window._origToggleCountCategory = window.toggleCountCategory;
+            window.toggleCountCategory = function(cat) {
+                if (!window._tourCRUnlocked) return;
+                window._origToggleCountCategory(cat);
+            };
+            // Watch for detail table popup → unlock category buttons
+            window._tourCRObserver = new MutationObserver(function(mutations) {
+                for (var i = 0; i < mutations.length; i++) {
+                    for (var j = 0; j < mutations[i].addedNodes.length; j++) {
+                        var node = mutations[i].addedNodes[j];
+                        if (node.id === 'category-table-popup') {
+                            window._tourCRUnlocked = true;
+                            return;
+                        }
+                    }
+                }
+            });
+            window._tourCRObserver.observe(document.body, { childList: true });
+        },
+        onExit: function() {
+            // Restore original toggleCountCategory
+            if (window._origToggleCountCategory) {
+                window.toggleCountCategory = window._origToggleCountCategory;
+                delete window._origToggleCountCategory;
+            }
+            delete window._tourCRUnlocked;
+            if (window._tourCRObserver) {
+                window._tourCRObserver.disconnect();
+                delete window._tourCRObserver;
+            }
+            const cr = document.getElementById('countReport');
+            cr.style.zIndex = '';
+            // Close any detail table popup opened during this step
+            const catPopup = document.getElementById('category-table-popup');
+            if (catPopup) catPopup.remove();
+            // Reset all exercise filters
+            sliderValues.joints = 0;
+            document.getElementById('slider-joints').value = 0;
+            document.getElementById('value-joints').textContent = '0%';
+            sliderValues.sufficiency = 100;
+            document.getElementById('slider-sufficiency').value = 100;
+            document.getElementById('value-sufficiency').textContent = '100%';
+            sufficiencyMode = 'lte';
+            const toggleBtn = document.getElementById('sufficiency-mode-toggle');
+            if (toggleBtn) toggleBtn.textContent = '\u2264 Mode';
+            evaluationActive = false;
+            currentMode = 'default';
+            updateBridgeSizes();
+        }
+    },
+    // Step 10: Wrap-up — dead center of screen
+    {
+        target: null,
+        title: "You're Ready!",
+        text: 'You now know the essentials of SpanBase. Explore districts, apply filters, and click bridges to dive deeper.\n\nOpen the Condition Filter panel and click Tutorial to replay this tour. Happy bridging!',
+        position: 'bottom',
+        onEnter: null,
+        onExit: null
+    }
+];
+
+function saveTourState() {
+    const condPanel = document.getElementById('evaluationPanel');
+    const attrPanel = document.getElementById('attributesPanel');
+    tourPreState = {
+        condOpen: condPanel.classList.contains('open'),
+        condBehind: condPanel.classList.contains('behind'),
+        attrOpen: attrPanel.classList.contains('open'),
+        attrOnTop: attrPanel.classList.contains('ontop'),
+        evalActive: evaluationActive,
+        evalMode: currentMode,
+        sliders: Object.assign({}, sliderValues),
+        suffMode: sufficiencyMode,
+        hubMode: hubDataMode,
+        hubRingsVisible: projectRingsVisible,
+        mapCenter: map.getCenter(),
+        mapZoom: map.getZoom()
+    };
+}
+
+function restoreTourState() {
+    if (!tourPreState) return;
+    const condPanel = document.getElementById('evaluationPanel');
+    const attrPanel = document.getElementById('attributesPanel');
+
+    // Restore condition panel
+    condPanel.classList.toggle('open', tourPreState.condOpen);
+    condPanel.classList.toggle('behind', tourPreState.condBehind);
+
+    // Restore attributes panel
+    attrPanel.classList.toggle('open', tourPreState.attrOpen);
+    attrPanel.classList.toggle('ontop', tourPreState.attrOnTop);
+
+    // Restore all slider values
+    const saved = tourPreState.sliders;
+    Object.keys(saved).forEach(key => {
+        sliderValues[key] = saved[key];
+        const slider = document.getElementById('slider-' + key);
+        const display = document.getElementById('value-' + key);
+        if (slider) slider.value = saved[key];
+        if (display) display.textContent = saved[key] + '%';
+    });
+
+    // Restore sufficiency mode
+    sufficiencyMode = tourPreState.suffMode;
+    const suffBtn = document.getElementById('sufficiency-mode-toggle');
+    if (suffBtn) suffBtn.textContent = (sufficiencyMode === 'lte') ? '\u2264 Mode' : '\u2265 Mode';
+
+    // Restore evaluation state
+    evaluationActive = tourPreState.evalActive;
+    currentMode = tourPreState.evalMode;
+    updateBridgeSizes();
+
+    // Restore HUB data mode
+    if (hubDataMode !== tourPreState.hubMode) {
+        hubDataMode = tourPreState.hubMode;
+        projectRingsVisible = tourPreState.hubRingsVisible;
+        const hubBtn = document.getElementById('projectToggle');
+        hubBtn.classList.remove('active', 'theme');
+        if (hubDataMode === 1) hubBtn.classList.add('active');
+        else if (hubDataMode === 2) hubBtn.classList.add('theme');
+        if (!projectRingsVisible) {
+            Object.values(projectRingLayers).forEach(ring => {
+                if (ring._map) ring.remove();
+            });
+        } else {
+            updateProjectRings();
+        }
+    }
+
+    // Restore map view
+    map.setView(tourPreState.mapCenter, tourPreState.mapZoom);
+
+    // Close any radial menus left open
+    closeAllMenus();
+
+    // Reset Count Report z-index in case we quit during CR step
+    const cr = document.getElementById('countReport');
+    cr.style.zIndex = '';
+
+    // Reset map z-index and re-enable interactions in case we quit during step 6
+    document.getElementById('map').style.zIndex = '';
+    map.dragging.enable();
+    map.scrollWheelZoom.enable();
+    map.doubleClickZoom.enable();
+    map.touchZoom.enable();
+    map.boxZoom.enable();
+    map.keyboard.enable();
+
+    // Reset HUB button z-index in case we quit during step 7
+    document.getElementById('projectToggle').style.zIndex = '';
+
+    tourPreState = null;
+}
+
+window.startTour = function() {
+    if (tourActive) return;
+    saveTourState();
+    tourActive = true;
+    tourStep = 0;
+    document.body.classList.add('tour-active');
+
+    // Create overlay elements
+    const overlay = document.createElement('div');
+    overlay.id = 'tour-overlay';
+    document.body.appendChild(overlay);
+
+    const spotlight = document.createElement('div');
+    spotlight.id = 'tour-spotlight';
+    document.body.appendChild(spotlight);
+
+    const tooltip = document.createElement('div');
+    tooltip.id = 'tour-tooltip';
+    document.body.appendChild(tooltip);
+
+    // Disable panel slide transitions so panels snap instantly during tour
+    document.getElementById('evaluationPanel').style.transition = 'none';
+    document.getElementById('attributesPanel').style.transition = 'none';
+
+    showTourStep(0);
+    window.addEventListener('resize', onTourResize);
+    window.addEventListener('keydown', onTourKeydown);
+};
+
+function showTourStep(index) {
+    if (index < 0 || index >= tourSteps.length) return;
+
+    const step = tourSteps[index];
+    const spotlight = document.getElementById('tour-spotlight');
+    const tooltip = document.getElementById('tour-tooltip');
+    if (!spotlight || !tooltip) return;
+
+    // Run onEnter
+    if (step.onEnter) step.onEnter();
+
+    // Allow DOM to settle after onEnter
+    requestAnimationFrame(() => {
+        // Compute target rect and position spotlight
+        // We store spotRect so positionTooltip can use it directly
+        // (can't measure spotlight later — it animates via CSS transition)
+        let spotRect = null;
+        const pad = 6;
+
+        if (step.target) {
+            const el = document.querySelector(step.target);
+            if (el) {
+                const rect = el.getBoundingClientRect();
+                spotRect = {
+                    top: rect.top - pad,
+                    left: rect.left - pad,
+                    right: rect.right + pad,
+                    bottom: rect.bottom + pad,
+                    width: rect.width + pad * 2,
+                    height: rect.height + pad * 2
+                };
+                spotlight.classList.remove('no-target');
+                spotlight.style.top = spotRect.top + 'px';
+                spotlight.style.left = spotRect.left + 'px';
+                spotlight.style.width = spotRect.width + 'px';
+                spotlight.style.height = spotRect.height + 'px';
+            } else {
+                spotlight.classList.add('no-target');
+            }
+        } else {
+            spotlight.classList.add('no-target');
+        }
+
+        // Build tooltip content
+        const total = tourSteps.length;
+        const backBtn = index > 0 ? '<button class="tour-btn" onclick="prevTourStep()">Back</button>' : '<span></span>';
+        const nextLabel = index < total - 1 ? 'Next' : 'Finish';
+        const nextBtn = '<button class="tour-btn" onclick="nextTourStep()">' + nextLabel + '</button>';
+        const closeBtn = '<button class="tour-btn" onclick="endTour()" style="margin-left:8px;border-color:rgba(255,255,255,0.3);color:rgba(255,255,255,0.6);">✕</button>';
+
+        // Convert newlines to <br> for multi-line text
+        const formattedText = step.text.replace(/\n/g, '<br>');
+
+        tooltip.innerHTML =
+            '<h4>' + step.title + '</h4>' +
+            '<p>' + formattedText + '</p>' +
+            '<div class="tour-nav">' +
+                backBtn +
+                '<span class="tour-counter">' + (index + 1) + ' of ' + total + '</span>' +
+                '<div>' + nextBtn + closeBtn + '</div>' +
+            '</div>';
+
+        // Position tooltip using computed spotRect (not the animating spotlight element)
+        positionTooltip(step, spotRect, tooltip);
+    });
+}
+
+function positionTooltip(step, spotRect, tooltip) {
+    // Reset for measurement
+    tooltip.style.top = '0px';
+    tooltip.style.left = '0px';
+    tooltip.style.opacity = '0';
+
+    requestAnimationFrame(() => {
+        const tRect = tooltip.getBoundingClientRect();
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const gap = 8;
+
+        let top, left;
+
+        // Fixed position override (e.g. pin to a corner)
+        if (step.tooltipFixed) {
+            const f = step.tooltipFixed;
+            if (f.top !== undefined) top = f.top;
+            if (f.bottom !== undefined) top = vh - tRect.height - f.bottom;
+            if (f.left !== undefined) left = f.left;
+            if (f.right !== undefined) left = vw - tRect.width - f.right;
+            if (top === undefined) top = (vh - tRect.height) / 2;
+            if (left === undefined) left = (vw - tRect.width) / 2;
+        } else if (step.target === null || !spotRect) {
+            // No target: center on screen
+            top = (vh - tRect.height) / 2;
+            left = (vw - tRect.width) / 2;
+        } else {
+            // Position relative to the pre-computed target rect (not the animating spotlight)
+            switch (step.position) {
+                case 'bottom':
+                    top = spotRect.bottom + gap;
+                    left = spotRect.left + (spotRect.width - tRect.width) / 2;
+                    break;
+                case 'top':
+                    top = spotRect.top - tRect.height - gap;
+                    left = spotRect.left + (spotRect.width - tRect.width) / 2;
+                    break;
+                case 'left':
+                    top = spotRect.top + (spotRect.height - tRect.height) / 2;
+                    left = spotRect.left - tRect.width - gap;
+                    break;
+                case 'right':
+                    top = spotRect.top + (spotRect.height - tRect.height) / 2;
+                    left = spotRect.right + gap;
+                    break;
+                default:
+                    top = spotRect.bottom + gap;
+                    left = spotRect.left + (spotRect.width - tRect.width) / 2;
+            }
+        }
+
+        // Clamp to viewport
+        if (left < 10) left = 10;
+        if (left + tRect.width > vw - 10) left = vw - tRect.width - 10;
+        if (top < 10) top = 10;
+        if (top + tRect.height > vh - 10) top = vh - tRect.height - 10;
+
+        tooltip.style.top = top + 'px';
+        tooltip.style.left = left + 'px';
+        tooltip.style.opacity = '1';
+    });
+}
+
+window.nextTourStep = function() {
+    if (!tourActive) return;
+    const prev = tourSteps[tourStep];
+    if (prev && prev.onExit) prev.onExit();
+
+    tourStep++;
+    if (tourStep >= tourSteps.length) {
+        endTour();
+    } else {
+        showTourStep(tourStep);
+    }
+};
+
+window.prevTourStep = function() {
+    if (!tourActive || tourStep <= 0) return;
+    const prev = tourSteps[tourStep];
+    if (prev && prev.onExit) prev.onExit();
+
+    tourStep--;
+    showTourStep(tourStep);
+};
+
+window.endTour = function() {
+    if (!tourActive) return;
+
+    // Run current step's onExit
+    const cur = tourSteps[tourStep];
+    if (cur && cur.onExit) cur.onExit();
+
+    // Remove tour elements
+    const overlay = document.getElementById('tour-overlay');
+    const spotlight = document.getElementById('tour-spotlight');
+    const tooltip = document.getElementById('tour-tooltip');
+    if (overlay) overlay.remove();
+    if (spotlight) spotlight.remove();
+    if (tooltip) tooltip.remove();
+
+    // Re-enable panel transitions
+    document.getElementById('evaluationPanel').style.transition = '';
+    document.getElementById('attributesPanel').style.transition = '';
+
+    // Remove tour-active body class (drops category-table-popup z-index back to normal)
+    document.body.classList.remove('tour-active');
+
+    // Close any category table popup left open during tour
+    const catPopup = document.getElementById('category-table-popup');
+    if (catPopup) catPopup.remove();
+
+    // Clean up CR button gating in case we quit during step 9
+    if (window._origToggleCountCategory) {
+        window.toggleCountCategory = window._origToggleCountCategory;
+        delete window._origToggleCountCategory;
+    }
+    delete window._tourCRUnlocked;
+    if (window._tourCRObserver) {
+        window._tourCRObserver.disconnect();
+        delete window._tourCRObserver;
+    }
+
+    // Restore UI state
+    restoreTourState();
+
+    tourActive = false;
+    tourStep = 0;
+    window.removeEventListener('resize', onTourResize);
+    window.removeEventListener('keydown', onTourKeydown);
+};
+
+function onTourKeydown(e) {
+    if (!tourActive) return;
+    if (e.key === 'Escape') endTour();
+}
+
+function onTourResize() {
+    if (!tourActive) return;
+    showTourStep(tourStep);
+}
 
