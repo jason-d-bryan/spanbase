@@ -3968,10 +3968,28 @@ window.toggleCountCategory = function(category) {
     applyCountCategoryFilter();
     updateButtonStyles();
     updateProjectRings();
+    syncHubButton();
 
     // Auto-zoom
     setTimeout(autoZoomToFilteredBridges, 100);
 };
+
+// Sync Hub Button (projectToggle) state based on CRHUB isolation
+function syncHubButton() {
+    const btn = document.getElementById('projectToggle');
+    if (!btn) return;
+    if (countCategoryState.hubdata) {
+        // CRHUB active — grey out the Hub Button
+        btn.style.opacity = '0.3';
+        btn.style.pointerEvents = 'none';
+        btn.style.cursor = 'not-allowed';
+    } else {
+        // CRHUB inactive — restore Hub Button to current hubDataMode state
+        btn.style.opacity = '1';
+        btn.style.pointerEvents = 'auto';
+        btn.style.cursor = 'pointer';
+    }
+}
 
 // Apply category filter
 function applyCountCategoryFilter() {
