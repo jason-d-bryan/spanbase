@@ -1657,7 +1657,31 @@ function updateDebugPanel() {
                 </div>
             </div>
         </div>
+
+        <div class="debug-section">
+            <span onclick="showEasterEggList()" style="color:var(--wvdoh-yellow);font-size:8pt;cursor:pointer;text-decoration:underline;opacity:0.6;">Easter Eggs</span>
+        </div>
     `;
+}
+
+function showEasterEggList() {
+    const existing = document.getElementById('egg-list-popup');
+    if (existing) { existing.remove(); return; }
+    const popup = document.createElement('div');
+    popup.id = 'egg-list-popup';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:var(--wvdoh-blue);border:2px solid var(--wvdoh-yellow);border-radius:10px;padding:20px 28px;box-shadow:0 8px 40px rgba(0,0,0,0.7);max-width:460px;';
+    popup.innerHTML =
+        '<button onclick="document.getElementById(\'egg-list-popup\').remove()" style="position:absolute;top:8px;right:12px;background:none;border:none;color:#fff;font-size:14pt;cursor:pointer;">✕</button>' +
+        '<div style="color:var(--wvdoh-yellow);font-weight:700;font-size:12pt;margin-bottom:14px;">Easter Eggs</div>' +
+        '<div style="color:rgba(255,255,255,0.85);font-size:9.5pt;line-height:2.2;">' +
+        '<b style="color:var(--wvdoh-yellow);">1.</b> Type <b>rick</b> or <b>astley</b> in Route Search &mdash; Rick Roll<br>' +
+        '<b style="color:var(--wvdoh-yellow);">2.</b> Type <b>42</b> in Route Search &mdash; Hitchhiker\'s Guide<br>' +
+        '<b style="color:var(--wvdoh-yellow);">3.</b> Type <b>↑↑↓↓←→←→BA</b> on keyboard &mdash; Contra 30 Lives<br>' +
+        '<b style="color:var(--wvdoh-yellow);">4.</b> Type <b>wv</b> or <b>country roads</b> in Route Search &mdash; Take Me Home<br>' +
+        '<b style="color:var(--wvdoh-yellow);">5.</b> Click <b>SpanBase</b> title <b>7 times</b> &mdash; Enter the Matrix<br>' +
+        '<b style="color:var(--wvdoh-yellow);">6.</b> <b>December 15th</b> (or Ctrl+Shift+M) &mdash; Mothman / Silver Bridge Memorial' +
+        '</div>';
+    document.body.appendChild(popup);
 }
 
 // District toggle functionality
@@ -3474,6 +3498,9 @@ function calculateMaxBridgeCounts() {
             if (!bridgePassesAttributesFilter(bridge)) return;
         }
 
+        // Box select exclusion
+        if (boxExcludedBars.has(bars)) return;
+
         // Sufficiency filter
         if (sliderValues.sufficiency < 100) {
             const calcSuff = getSufficiencyRating(bridge);
@@ -3533,6 +3560,9 @@ function showCategoryTable(category) {
         if (typeof attributesFilterState !== 'undefined' && attributesFilterState.active) {
             if (!bridgePassesAttributesFilter(bridge)) return;
         }
+
+        // Box select exclusion
+        if (boxExcludedBars.has(bars)) return;
 
         if (sliderValues.sufficiency < 100) {
             const calcSuff = getSufficiencyRating(bridge);
@@ -3867,6 +3897,9 @@ function showMaintenanceCategoryTable(category) {
         if (typeof attributesFilterState !== 'undefined' && attributesFilterState.active) {
             if (!bridgePassesAttributesFilter(bridge)) return;
         }
+
+        // Box select exclusion
+        if (boxExcludedBars.has(bars)) return;
 
         if (sliderValues.sufficiency < 100) {
             const calcSuff = getSufficiencyRating(bridge);
@@ -5877,6 +5910,14 @@ function initEasterEggs() {
         }
     });
 
+    // Mothman: Ctrl+Shift+M
+    document.addEventListener('keydown', function(e) {
+        if (e.ctrlKey && e.shiftKey && e.key === 'M') {
+            e.preventDefault();
+            checkMothmanDay(true);
+        }
+    });
+
     // Matrix: click header title 7 times
     let headerClicks = 0;
     let headerClickTimer = null;
@@ -6101,9 +6142,11 @@ function showCountryRoadsEgg() {
 // MOTHMAN — December 15th Memorial
 // ═══════════════════════════════════════════════════════
 
-function checkMothmanDay() {
-    const now = new Date();
-    if (now.getMonth() !== 11 || now.getDate() !== 15) return; // Dec = month 11
+function checkMothmanDay(force) {
+    if (!force) {
+        const now = new Date();
+        if (now.getMonth() !== 11 || now.getDate() !== 15) return; // Dec = month 11
+    }
 
     // Full-screen black overlay
     const overlay = document.createElement('div');
@@ -6115,7 +6158,7 @@ function checkMothmanDay() {
     eyesContainer.style.cssText = 'display:flex;gap:60px;margin-bottom:60px;opacity:0;transition:opacity 2s ease 1s;';
 
     const leftEye = document.createElement('div');
-    leftEye.style.cssText = 'width:80px;height:80px;border-radius:50%;background:radial-gradient(circle,#ff0000 30%,#cc0000 60%,#660000 100%);box-shadow:0 0 40px #ff0000,0 0 80px #ff0000,0 0 120px rgba(255,0,0,0.5);animation:mothmanPulse 3s ease-in-out infinite;';
+    leftEye.style.cssText = 'width:96px;height:96px;border-radius:50%;background:radial-gradient(circle,#ff0000 30%,#cc0000 60%,#660000 100%);box-shadow:0 0 40px #ff0000,0 0 80px #ff0000,0 0 120px rgba(255,0,0,0.5);animation:mothmanPulse 3s ease-in-out infinite;';
 
     const rightEye = document.createElement('div');
     rightEye.style.cssText = leftEye.style.cssText;
