@@ -859,9 +859,43 @@
             align-items: center;
         }
 
-        .tour-counter {
-            font-size: 9pt;
-            color: rgba(255,255,255,0.5);
+        .tour-pages {
+            display: flex;
+            justify-content: center;
+            gap: 4px;
+            margin-top: 10px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .tour-page {
+            width: 22px;
+            height: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 8pt;
+            font-weight: 600;
+            color: rgba(255,255,255,0.4);
+            cursor: pointer;
+            border-radius: 50%;
+            transition: all 0.2s;
+        }
+
+        .tour-page:hover {
+            color: var(--wvdoh-yellow);
+            background: rgba(255,184,28,0.15);
+        }
+
+        .tour-page-active {
+            color: var(--wvdoh-blue);
+            background: var(--wvdoh-yellow);
+            cursor: default;
+        }
+
+        .tour-page-active:hover {
+            color: var(--wvdoh-blue);
+            background: var(--wvdoh-yellow);
         }
 
         .tour-btn {
@@ -996,6 +1030,17 @@
         body.tour-active .info-panel {
             z-index: 12002;
         }
+
+        /* Raise box select elements above the map during tour (map is z-index:12000) */
+        body.tour-active #box-select-rect {
+            z-index: 12003;
+        }
+        body.tour-active #box-select-popup {
+            z-index: 12004;
+        }
+        body.tour-active #box-filter-indicator {
+            z-index: 12003;
+        }
     </style>
 </head>
 <body>
@@ -1005,7 +1050,7 @@
     </div>
     
     <div class="last-updated">
-        Last updated 02/07/26 06:09 PM
+        Last updated 02/07/26 08:45 PM
     </div>
     
     <div class="header">
@@ -1154,7 +1199,7 @@
         <div class="panel-body">
             <!-- NO INSTRUCTION TEXT -->
             <!-- ROUTE/SUBROUTE SEARCH -->
-            <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
+            <div id="route-search-box" style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
                 <h4 class="section-title">Route Search</h4>
                 <div style="margin-bottom: 10px;">
                     <label class="slider-label" style="margin-bottom: 5px; display: block; font-size: 10pt;">Route</label>

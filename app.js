@@ -225,6 +225,10 @@ function addBridges() {
             if (currentZoom < 9) {
                 return;
             }
+            // Disabled during certain tour steps
+            if (window._tourDisableRadial) {
+                return;
+            }
 
             L.DomEvent.stopPropagation(e);
             removeNameTooltip();
@@ -4879,25 +4883,27 @@ const tourSteps = [
             map.fitBounds(wvBounds, { padding: [100, 50], maxZoom: 8 });
         }
     },
-    // Step 7: Box Select — search for route 79, teach Ctrl+drag
+    // Step 7: Box Select — open AF, highlight route search, Ctrl+drag demo
     {
-        target: '#map',
+        target: '#route-search-box',
         title: 'Box Select',
-        text: 'We just searched for "route 79" — notice some results aren\'t on I-79.\n\nHold Ctrl and drag a box around the bridges you don\'t want, then click Exclude to remove them. You can also use Include to keep only selected bridges.\n\nTry it now! A Reset button appears at the bottom when a box filter is active.',
-        position: 'bottom',
-        tooltipFixed: { bottom: 20 },
+        text: 'We\'ve searched Route 79 for you. Notice some results aren\'t on I-79 — they\'re inside the red circle. 🤫\n\nYou can either exclude these points OR hide all the others. Hold Ctrl and drag a box around them, then click Exclude or Include. You can also pan and zoom the map.\n\nA Reset button appears at the bottom when a box filter is active.',
+        position: 'right',
+        tooltipFixed: { right: 20 },
         onEnter: function() {
-            // Close panels
             const condPanel = document.getElementById('evaluationPanel');
             const attrPanel = document.getElementById('attributesPanel');
-            condPanel.classList.remove('open', 'behind');
-            attrPanel.classList.remove('open', 'ontop');
 
-            // Reset any lingering evaluation state from prior steps
+            // Open Attributes panel
+            attrPanel.classList.add('open', 'ontop');
+            condPanel.classList.remove('open');
+            condPanel.classList.remove('behind');
+
+            // Reset any lingering evaluation state
             evaluationActive = false;
             currentMode = 'default';
 
-            // Reset count category state so stale isolation doesn't hide results
+            // Reset count category state
             countCategoryState.critical = true;
             countCategoryState.emergent = true;
             countCategoryState.satisfactory = true;
@@ -4912,41 +4918,158 @@ const tourSteps = [
             const ind = document.getElementById('box-filter-indicator');
             if (ind) ind.remove();
 
-            // Type "route 79" into search and trigger it
-            const searchInput = document.getElementById('searchInput');
-            searchInput.value = 'route 79';
-            currentSearchQuery = 'ROUTE 79';
+            // Auto-fill route search with "79" and trigger
+            const routeInput = document.getElementById('route-search');
+            routeInput.value = '79';
+            attributesFilterState.route = '79';
+            applyAttributesFilter();
             updateBridgeSizes();
-            zoomToSearchResults();
+            setTimeout(function() { autoZoomToFilteredBridges(); }, 150);
 
-            // Raise map above overlay so Ctrl+drag works
+            // Grey overlay inside the panel to dim everything except route search
+            const panelBody = attrPanel.querySelector('.panel-body');
+            const overlay = document.createElement('div');
+            overlay.id = 'tour-panel-overlay';
+            overlay.style.cssText = 'position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); z-index: 1; pointer-events: none; border-radius: 0 0 12px 0;';
+            panelBody.style.position = 'relative';
+            panelBody.appendChild(overlay);
+
+            // Raise route search box above the panel overlay
+            const routeBox = document.getElementById('route-search-box');
+            routeBox.style.position = 'relative';
+            routeBox.style.zIndex = '2';
+
+            // Disable AF scrollbar
+            panelBody.style.overflow = 'hidden';
+
+            // Disable CF folder tab
+            const condTab = condPanel.querySelector('.folder-tab');
+            condTab.style.pointerEvents = 'none';
+            condTab.style.opacity = '0.3';
+
+            // Disable radial menus during this step
+            window._tourDisableRadial = true;
+
+            // Enable Ctrl+drag box select during tour
+            window._tourBoxSelectEnabled = true;
+
+            // Raise panel and map above tour overlay
+            attrPanel.style.zIndex = '12000';
             document.getElementById('map').style.zIndex = '12000';
-            // Disable panning/zoom so only Ctrl+drag and clicks work
-            map.dragging.disable();
-            map.scrollWheelZoom.disable();
-            map.doubleClickZoom.disable();
-            map.touchZoom.disable();
-            map.keyboard.disable();
-        },
-        onExit: function() {
-            // Clear search
-            document.getElementById('searchInput').value = '';
-            currentSearchQuery = '';
 
-            // Clear box selection
-            boxExcludedBars.clear();
-            const ind = document.getElementById('box-filter-indicator');
-            if (ind) ind.remove();
+            // Hide the tour overlay and spotlight so map is fully uncovered
+            const tourOverlay = document.getElementById('tour-overlay');
+            if (tourOverlay) tourOverlay.style.display = 'none';
+            const tourSpotlight = document.getElementById('tour-spotlight');
+            if (tourSpotlight) tourSpotlight.style.display = 'none';
 
-            // Reset map z-index and re-enable interactions
-            document.getElementById('map').style.zIndex = '';
+            // Enable full map interaction (but disable boxZoom so Ctrl+drag works for box select)
             map.dragging.enable();
             map.scrollWheelZoom.enable();
             map.doubleClickZoom.enable();
             map.touchZoom.enable();
             map.keyboard.enable();
+            map.boxZoom.disable();
 
-            applySearch();
+            // Draw one big red circle around the non-interstate outlier cluster
+            // Bounding bridges: left=03a158, right=20a724, top=20a519, bottom=03a073
+            setTimeout(function() {
+                window._tourRedCircles = [];
+                const boundaryBars = ['03A158', '20A724', '20A519', '03A073'];
+                const boundaryLatLngs = [];
+                boundaryBars.forEach(function(bars) {
+                    const marker = bridgeLayers[bars];
+                    if (marker) boundaryLatLngs.push(marker.getLatLng());
+                });
+                if (boundaryLatLngs.length > 0) {
+                    const bounds = L.latLngBounds(boundaryLatLngs);
+                    const center = bounds.getCenter();
+                    const centerPx = map.latLngToContainerPoint(center);
+                    // Find farthest boundary point in pixels, add 40px padding
+                    let maxPxDist = 0;
+                    boundaryLatLngs.forEach(function(ll) {
+                        const px = map.latLngToContainerPoint(ll);
+                        const d = centerPx.distanceTo(px);
+                        if (d > maxPxDist) maxPxDist = d;
+                    });
+                    // Convert pixel radius + 40px padding back to meters
+                    const edgePx = L.point(centerPx.x + maxPxDist + 40, centerPx.y);
+                    const edgeLatLng = map.containerPointToLatLng(edgePx);
+                    const radiusMeters = center.distanceTo(edgeLatLng);
+                    const bigCircle = L.circle(center, {
+                        radius: radiusMeters,
+                        fillColor: 'transparent',
+                        fillOpacity: 0,
+                        color: '#ff0000',
+                        weight: 3,
+                        opacity: 0.8,
+                        dashArray: '8, 6'
+                    }).addTo(map);
+                    window._tourRedCircles.push(bigCircle);
+                }
+            }, 300);
+        },
+        onExit: function() {
+            // Clear route search
+            const routeInput = document.getElementById('route-search');
+            if (routeInput) { routeInput.value = ''; }
+            attributesFilterState.route = '';
+            applyAttributesFilter();
+
+            // Clear box selection
+            boxExcludedBars.clear();
+            const bfInd = document.getElementById('box-filter-indicator');
+            if (bfInd) bfInd.remove();
+
+            // Remove red circles
+            if (window._tourRedCircles) {
+                window._tourRedCircles.forEach(function(c) { if (c._map) c.remove(); });
+                delete window._tourRedCircles;
+            }
+
+            // Remove panel overlay
+            const panelOverlay = document.getElementById('tour-panel-overlay');
+            if (panelOverlay) panelOverlay.remove();
+
+            // Reset route search box styling
+            const routeBox = document.getElementById('route-search-box');
+            routeBox.style.position = '';
+            routeBox.style.zIndex = '';
+
+            // Restore AF scrollbar
+            const attrPanel = document.getElementById('attributesPanel');
+            const panelBody = attrPanel.querySelector('.panel-body');
+            panelBody.style.overflow = '';
+
+            // Restore CF folder tab
+            const condPanel = document.getElementById('evaluationPanel');
+            const condTab = condPanel.querySelector('.folder-tab');
+            condTab.style.pointerEvents = '';
+            condTab.style.opacity = '';
+
+            // Re-enable radial menus
+            delete window._tourDisableRadial;
+
+            // Disable tour box select
+            delete window._tourBoxSelectEnabled;
+
+            // Re-enable boxZoom
+            map.boxZoom.enable();
+
+            // Restore tour overlay and spotlight
+            const tourOverlay = document.getElementById('tour-overlay');
+            if (tourOverlay) tourOverlay.style.display = '';
+            const tourSpotlight = document.getElementById('tour-spotlight');
+            if (tourSpotlight) tourSpotlight.style.display = '';
+
+            // Reset panel and map z-indexes
+            attrPanel.style.zIndex = '';
+            document.getElementById('map').style.zIndex = '';
+
+            // Close panels
+            condPanel.classList.remove('open', 'behind');
+            attrPanel.classList.remove('open', 'ontop');
+
             updateBridgeSizes();
         }
     },
@@ -5171,8 +5294,48 @@ function restoreTourState() {
     const cr = document.getElementById('countReport');
     cr.style.zIndex = '';
 
-    // Reset map z-index and re-enable interactions in case we quit during step 6
+    // Reset header, map, and panel z-indexes in case we quit during step 6 or 7
+    document.querySelector('.header').style.zIndex = '';
     document.getElementById('map').style.zIndex = '';
+    document.getElementById('evaluationPanel').style.zIndex = '';
+    document.getElementById('attributesPanel').style.zIndex = '';
+
+    // Clean up step 7 state
+    const tourPanelOverlay = document.getElementById('tour-panel-overlay');
+    if (tourPanelOverlay) tourPanelOverlay.remove();
+    const routeSearchBox = document.getElementById('route-search-box');
+    if (routeSearchBox) { routeSearchBox.style.position = ''; routeSearchBox.style.zIndex = ''; }
+    const routeInput = document.getElementById('route-search');
+    const subrouteInput = document.getElementById('subroute-search');
+    if (routeInput) { routeInput.value = ''; }
+    if (subrouteInput) { subrouteInput.value = ''; }
+    attributesFilterState.route = '';
+    attributesFilterState.subroute = '';
+    applyAttributesFilter();
+
+    // Remove red circles
+    if (window._tourRedCircles) {
+        window._tourRedCircles.forEach(function(c) { if (c._map) c.remove(); });
+        delete window._tourRedCircles;
+    }
+
+    // Restore AF scrollbar
+    const attrPanelBody = document.getElementById('attributesPanel').querySelector('.panel-body');
+    if (attrPanelBody) attrPanelBody.style.overflow = '';
+
+    // Restore CF folder tab
+    const condTab = document.getElementById('evaluationPanel').querySelector('.folder-tab');
+    if (condTab) { condTab.style.pointerEvents = ''; condTab.style.opacity = ''; }
+
+    // Clean up tour flags
+    delete window._tourDisableRadial;
+    delete window._tourBoxSelectEnabled;
+
+    // Restore tour overlay and spotlight
+    const tourOverlay = document.getElementById('tour-overlay');
+    if (tourOverlay) tourOverlay.style.display = '';
+    const tourSpotlight = document.getElementById('tour-spotlight');
+    if (tourSpotlight) tourSpotlight.style.display = '';
     map.dragging.enable();
     map.scrollWheelZoom.enable();
     map.doubleClickZoom.enable();
@@ -5289,14 +5452,22 @@ function showTourStep(index) {
         // Convert newlines to <br> for multi-line text
         const formattedText = step.text.replace(/\n/g, '<br>');
 
+        // Build page number links
+        let pageLinks = '<div class="tour-pages">';
+        for (let i = 0; i < total; i++) {
+            const active = i === index ? ' tour-page-active' : '';
+            pageLinks += '<span class="tour-page' + active + '" onclick="goToTourStep(' + i + ')">' + (i + 1) + '</span>';
+        }
+        pageLinks += '</div>';
+
         tooltip.innerHTML =
             '<h4>' + step.title + '</h4>' +
             '<p>' + formattedText + '</p>' +
             '<div class="tour-nav">' +
                 backBtn +
-                '<span class="tour-counter">' + (index + 1) + ' of ' + total + '</span>' +
                 '<div>' + nextBtn + closeBtn + '</div>' +
-            '</div>';
+            '</div>' +
+            pageLinks;
 
         // Position tooltip using computed spotRect (not the animating spotlight element)
         positionTooltip(step, spotRect, tooltip);
@@ -5389,6 +5560,16 @@ window.prevTourStep = function() {
     showTourStep(tourStep);
 };
 
+window.goToTourStep = function(index) {
+    if (!tourActive) return;
+    if (index < 0 || index >= tourSteps.length || index === tourStep) return;
+    const prev = tourSteps[tourStep];
+    if (prev && prev.onExit) prev.onExit();
+
+    tourStep = index;
+    showTourStep(tourStep);
+};
+
 window.endTour = function() {
     if (!tourActive) return;
 
@@ -5455,12 +5636,14 @@ function initBoxSelect() {
     let startX, startY;
     let selectionBox = null;
 
+    // Use capture phase so this fires before Leaflet's internal handlers
     mapContainer.addEventListener('mousedown', function(e) {
         if (!e.ctrlKey || e.button !== 0) return;
-        if (tourActive) return;
+        if (tourActive && !window._tourBoxSelectEnabled) return;
 
         e.preventDefault();
         e.stopPropagation();
+        e.stopImmediatePropagation();
         map.dragging.disable();
         map.boxZoom.disable();
 
@@ -5473,7 +5656,7 @@ function initBoxSelect() {
         selectionBox.style.left = startX + 'px';
         selectionBox.style.top = startY + 'px';
         document.body.appendChild(selectionBox);
-    });
+    }, true);
 
     document.addEventListener('mousemove', function(e) {
         if (!isSelecting || !selectionBox) return;
@@ -5491,7 +5674,10 @@ function initBoxSelect() {
         if (!isSelecting) return;
         isSelecting = false;
         map.dragging.enable();
-        map.boxZoom.enable();
+        // Don't re-enable boxZoom during tour (step 7 intentionally disables it)
+        if (!window._tourBoxSelectEnabled) {
+            map.boxZoom.enable();
+        }
 
         const endX = e.clientX;
         const endY = e.clientY;
@@ -5581,6 +5767,10 @@ function showBoxSelectPopup(selectedBars, rect) {
                 boxExcludedBars.add(bars);
             }
         });
+        // Hide tour red circle if present
+        if (window._tourRedCircles) {
+            window._tourRedCircles.forEach(function(c) { if (c._map) c.remove(); });
+        }
         popup.remove();
         updateBridgeSizes();
         showBoxFilterIndicator();
@@ -5588,6 +5778,10 @@ function showBoxSelectPopup(selectedBars, rect) {
 
     document.getElementById('box-select-exclude').addEventListener('click', function() {
         selectedBars.forEach(bars => boxExcludedBars.add(bars));
+        // Hide tour red circle if present
+        if (window._tourRedCircles) {
+            window._tourRedCircles.forEach(function(c) { if (c._map) c.remove(); });
+        }
         popup.remove();
         updateBridgeSizes();
         showBoxFilterIndicator();
