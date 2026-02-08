@@ -4,6 +4,7 @@ let bridgesData = [];
 let sufficiencyData = {}; // BARS number -> calculated sufficiency rating
 let bridgeLayers = {};
 let projectsData = {};
+let hubData = {};
 let projectRingLayers = {};
 let projectRingsVisible = false;
 let currentMode = 'default';
@@ -93,6 +94,8 @@ async function init() {
         bridgesData = JSON.parse(decompressed);
         console.log(`✓ Loaded ${bridgesData.length} bridges`);
         buildQuantileTables();
+        updateSliderLabels();
+        buildBridgeTypeCheckboxes();
 
         // Load inspection data
         const inspResponse = await fetch('inspections_data.json.gz');
@@ -114,6 +117,19 @@ async function init() {
         } catch(e) {
             console.warn('Projects data not available:', e.message);
             projectsData = {};
+        }
+
+        // Load HUB funding data
+        try {
+            const hubResponse = await fetch('hub_data.json.gz');
+            const hubCompressed = await hubResponse.arrayBuffer();
+            const hubDecompressed = pako.inflate(new Uint8Array(hubCompressed), { to: 'string' });
+            hubData = JSON.parse(hubDecompressed);
+            console.log(`✓ Loaded HUB data for ${Object.keys(hubData).length} bridges`);
+            buildHubFilterUI();
+        } catch(e) {
+            console.warn('HUB data not available:', e.message);
+            hubData = {};
         }
 
         // Initialize map with WV bounding box
@@ -2247,6 +2263,15 @@ function updateBridgesForInspection() {
             }
         }
 
+        // CHECK HUB FILTER (if active, must pass)
+        if (hubFilterState.active) {
+            if (!bridgePassesHubFilter(bars)) {
+                marker.setStyle({ fillOpacity: 0, opacity: 0 });
+                if (marker._map) marker.remove();
+                return;
+            }
+        }
+
         // Box select exclusion
         if (boxExcludedBars.has(bars)) {
             marker.setStyle({ fillOpacity: 0, opacity: 0 });
@@ -2503,41 +2528,40 @@ function showInspectionsPopup(bridge) {
 window.toggleAttributesPanel = function() {
     const attrPanel = document.getElementById('attributesPanel');
     const condPanel = document.getElementById('evaluationPanel');
-    
+    const hubPanel = document.getElementById('hubPanel');
+
     const attrIsOnTop = attrPanel.classList.contains('ontop');
     const panelsOpen = attrPanel.classList.contains('open');
-    
+
     if (panelsOpen && attrIsOnTop) {
-        // Attributes already showing - clicking same tab closes both
         attrPanel.classList.remove('open', 'ontop');
         condPanel.classList.remove('open', 'behind');
     } else {
-        // Either closed OR Condition is showing - open/switch to Attributes
         attrPanel.classList.add('open', 'ontop');
         condPanel.classList.add('open', 'behind');
     }
+    if (hubPanel) hubPanel.classList.remove('open', 'ontop');
 };
 
 // Condition filter toggle
 window.toggleEvaluationPanel = function() {
     const attrPanel = document.getElementById('attributesPanel');
     const condPanel = document.getElementById('evaluationPanel');
-    
+    const hubPanel = document.getElementById('hubPanel');
+
     const attrIsOnTop = attrPanel.classList.contains('ontop');
     const panelsOpen = condPanel.classList.contains('open');
-    
+
     if (panelsOpen && !attrIsOnTop) {
-        // Condition already showing - clicking same tab closes both
         condPanel.classList.remove('open', 'behind');
         attrPanel.classList.remove('open', 'ontop');
     } else {
-        // Either closed OR Attributes is showing - open/switch to Condition
         condPanel.classList.add('open');
         attrPanel.classList.add('open');
-        // Remove special z-index classes so Condition's default z-index wins
         condPanel.classList.remove('behind');
         attrPanel.classList.remove('ontop');
     }
+    if (hubPanel) hubPanel.classList.remove('open', 'ontop');
 };
 
 // ===== ATTRIBUTES FILTER SYSTEM (v7.0.7) =====
@@ -2554,6 +2578,7 @@ const attributesFilterState = {
     utilities: false,
     onBridge: [],
     underBridge: [],
+    bridgeType: [],
     route: '',
     subroute: '',
     showNA: false  // Don't show N/A bridges by default
@@ -2606,41 +2631,45 @@ window.setNhsFilter = function(value) {
 
 // Reset attributes filter
 window.resetAttributesFilter = function() {
-    attributesFilterState.length = { value: 4020, mode: 'lte' };
-    attributesFilterState.width = { value: 880, mode: 'lte' };
-    attributesFilterState.area = { value: 403000, mode: 'lte' };
-    attributesFilterState.age = { value: 210, mode: 'lte' };
-    
+    attributesFilterState.length = { value: sliderMaxValues.length, mode: 'lte' };
+    attributesFilterState.width = { value: sliderMaxValues.width, mode: 'lte' };
+    attributesFilterState.area = { value: sliderMaxValues.area, mode: 'lte' };
+    attributesFilterState.age = { value: sliderMaxValues.age, mode: 'lte' };
+
     document.getElementById('slider-length').value = 100;
-    document.getElementById('value-length').textContent = '4,020 ft';
+    document.getElementById('value-length').textContent = sliderMaxValues.length.toLocaleString() + ' ft';
     document.getElementById('length-mode-toggle').textContent = '≤ Mode';
 
     document.getElementById('slider-width').value = 100;
-    document.getElementById('value-width').textContent = '880 ft';
+    document.getElementById('value-width').textContent = sliderMaxValues.width.toLocaleString() + ' ft';
     document.getElementById('width-mode-toggle').textContent = '≤ Mode';
 
     document.getElementById('slider-area').value = 100;
-    document.getElementById('value-area').innerHTML = '403,000 ft<sup>2</sup>';
+    document.getElementById('value-area').innerHTML = sliderMaxValues.area.toLocaleString() + ' ft<sup>2</sup>';
     document.getElementById('area-mode-toggle').textContent = '≤ Mode';
 
     document.getElementById('slider-age').value = 100;
-    document.getElementById('value-age').textContent = '210 years';
+    document.getElementById('value-age').textContent = sliderMaxValues.age.toLocaleString() + ' years';
     document.getElementById('age-mode-toggle').textContent = '≤ Mode';
 
-    attributesFilterState.adt = { value: 150000, mode: 'lte' };
+    attributesFilterState.adt = { value: sliderMaxValues.adt, mode: 'lte' };
     document.getElementById('slider-adt').value = 100;
-    document.getElementById('value-adt').textContent = '150,000';
+    document.getElementById('value-adt').textContent = sliderMaxValues.adt.toLocaleString();
     document.getElementById('adt-mode-toggle').textContent = '≤ Mode';
 
     setNhsFilter('all');
-    
+
     document.getElementById('attr-utilities').checked = false;
     document.querySelectorAll('.on-bridge-cb').forEach(cb => cb.checked = false);
     document.querySelectorAll('.under-bridge-cb').forEach(cb => cb.checked = false);
-    
+
+    // Reset bridge type checkboxes
+    attributesFilterState.bridgeType = [];
+    document.querySelectorAll('.bridge-type-cb').forEach(cb => cb.checked = false);
+
     document.getElementById('route-search').value = '';
     document.getElementById('subroute-search').value = '';
-    
+
     attributesFilterState.utilities = false;
     attributesFilterState.onBridge = [];
     attributesFilterState.underBridge = [];
@@ -2651,10 +2680,16 @@ window.resetAttributesFilter = function() {
 
     const naCheckbox = document.getElementById('show-na-bridges');
     if (naCheckbox) naCheckbox.checked = false;
-    
+
+    // Re-enable all dimension sliders
+    ['slider-length', 'slider-width', 'slider-area'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.disabled = false; el.style.opacity = '1'; el.style.cursor = 'pointer'; }
+    });
+
     // Close count report
     closeCountReport();
-    
+
     applyAttributesFilter();
 };
 
@@ -2663,58 +2698,55 @@ document.addEventListener('DOMContentLoaded', function() {
     const lengthSlider = document.getElementById('slider-length');
     if (lengthSlider) {
         lengthSlider.addEventListener('input', function() {
-            const actualValue = sliderToValue(parseInt(this.value), 0, 4020, 'length');
+            const actualValue = sliderToValue(parseInt(this.value), 0, sliderMaxValues.length, 'length');
             attributesFilterState.length.value = actualValue;
             document.getElementById('value-length').textContent = actualValue.toLocaleString() + ' ft';
             checkDimensionSliders();
             applyAttributesFilter();
         });
-        // Auto-zoom when slider is released
         lengthSlider.addEventListener('change', function() {
-            if (attributesFilterState.length.value < 4020) {
+            if (attributesFilterState.length.value < sliderMaxValues.length) {
                 setTimeout(autoZoomToFilteredBridges, 100);
             }
         });
     }
-    
+
     const widthSlider = document.getElementById('slider-width');
     if (widthSlider) {
         widthSlider.addEventListener('input', function() {
-            const actualValue = sliderToValue(parseInt(this.value), 0, 880, 'width');
+            const actualValue = sliderToValue(parseInt(this.value), 0, sliderMaxValues.width, 'width');
             attributesFilterState.width.value = actualValue;
             document.getElementById('value-width').textContent = actualValue.toLocaleString() + ' ft';
             checkDimensionSliders();
             applyAttributesFilter();
         });
-        // Auto-zoom when slider is released
         widthSlider.addEventListener('change', function() {
-            if (attributesFilterState.width.value < 880) {
+            if (attributesFilterState.width.value < sliderMaxValues.width) {
                 setTimeout(autoZoomToFilteredBridges, 100);
             }
         });
     }
-    
+
     const areaSlider = document.getElementById('slider-area');
     if (areaSlider) {
         areaSlider.addEventListener('input', function() {
-            const actualValue = sliderToValue(parseInt(this.value), 0, 403000, 'area');
+            const actualValue = sliderToValue(parseInt(this.value), 0, sliderMaxValues.area, 'area');
             attributesFilterState.area.value = actualValue;
             document.getElementById('value-area').innerHTML = actualValue.toLocaleString() + ' ft<sup>2</sup>';
             checkDimensionSliders();
             applyAttributesFilter();
         });
-        // Auto-zoom when slider is released
         areaSlider.addEventListener('change', function() {
-            if (attributesFilterState.area.value < 403000) {
+            if (attributesFilterState.area.value < sliderMaxValues.area) {
                 setTimeout(autoZoomToFilteredBridges, 100);
             }
         });
     }
-    
+
     const ageSlider = document.getElementById('slider-age');
     if (ageSlider) {
         ageSlider.addEventListener('input', function() {
-            const rawValue = sliderToValue(parseInt(this.value), 0, 210, 'age');
+            const rawValue = sliderToValue(parseInt(this.value), 0, sliderMaxValues.age, 'age');
             // Round to nearest 5 years
             const actualValue = Math.round(rawValue / 5) * 5;
             attributesFilterState.age.value = actualValue;
@@ -2722,24 +2754,23 @@ document.addEventListener('DOMContentLoaded', function() {
             checkDimensionSliders();
             applyAttributesFilter();
         });
-        // Auto-zoom when slider is released
         ageSlider.addEventListener('change', function() {
-            if (attributesFilterState.age.value < 210) {
+            if (attributesFilterState.age.value < sliderMaxValues.age) {
                 setTimeout(autoZoomToFilteredBridges, 100);
             }
         });
     }
-    
+
     const adtSlider = document.getElementById('slider-adt');
     if (adtSlider) {
         adtSlider.addEventListener('input', function() {
-            const actualValue = sliderToValue(parseInt(this.value), 0, 150000, 'adt');
+            const actualValue = sliderToValue(parseInt(this.value), 0, sliderMaxValues.adt, 'adt');
             attributesFilterState.adt.value = actualValue;
             document.getElementById('value-adt').textContent = actualValue.toLocaleString();
             applyAttributesFilter();
         });
         adtSlider.addEventListener('change', function() {
-            if (attributesFilterState.adt.value < 150000) {
+            if (attributesFilterState.adt.value < sliderMaxValues.adt) {
                 setTimeout(autoZoomToFilteredBridges, 100);
             }
         });
@@ -2835,15 +2866,16 @@ function applyAttributesFilter() {
     // Check if any filter is active
     const isActive =
         attributesFilterState.showNA ||
-        attributesFilterState.length.value < 4020 ||
-        attributesFilterState.width.value < 880 ||
-        attributesFilterState.area.value < 403000 ||
-        attributesFilterState.age.value < 210 ||
-        attributesFilterState.adt.value < 150000 ||
+        attributesFilterState.length.value < sliderMaxValues.length ||
+        attributesFilterState.width.value < sliderMaxValues.width ||
+        attributesFilterState.area.value < sliderMaxValues.area ||
+        attributesFilterState.age.value < sliderMaxValues.age ||
+        attributesFilterState.adt.value < sliderMaxValues.adt ||
         attributesFilterState.nhs !== 'all' ||
         attributesFilterState.utilities ||
         attributesFilterState.onBridge.length > 0 ||
         attributesFilterState.underBridge.length > 0 ||
+        attributesFilterState.bridgeType.length > 0 ||
         attributesFilterState.route.length > 0 ||
         attributesFilterState.subroute.length > 0;
     
@@ -2909,11 +2941,11 @@ function bridgePassesAttributesFilter(bridge) {
     if (attributesFilterState.showNA) {
         // Exclusive NA mode — bridge must have N/A in at least one dimension
         // If sliders are moved, check only active dimensions; otherwise check all four
-        const lengthActive = attributesFilterState.length.value < 4020;
-        const widthActive = attributesFilterState.width.value < 880;
-        const areaActive = attributesFilterState.area.value < 403000;
-        const ageActive = attributesFilterState.age.value < 210;
-        const adtActive = attributesFilterState.adt.value < 150000;
+        const lengthActive = attributesFilterState.length.value < sliderMaxValues.length;
+        const widthActive = attributesFilterState.width.value < sliderMaxValues.width;
+        const areaActive = attributesFilterState.area.value < sliderMaxValues.area;
+        const ageActive = attributesFilterState.age.value < sliderMaxValues.age;
+        const adtActive = attributesFilterState.adt.value < sliderMaxValues.adt;
         const anySliderActive = lengthActive || widthActive || areaActive || ageActive || adtActive;
 
         let hasNA = false;
@@ -2948,23 +2980,23 @@ function bridgePassesAttributesFilter(bridge) {
         if (!anySliderActive) return true;
     } else {
         // Normal mode — hide bridges with N/A data for active dimensions
-        if (attributesFilterState.length.value < 4020) {
+        if (attributesFilterState.length.value < sliderMaxValues.length) {
             const length = parseFloat(bridge.bridge_length);
             if (isNaN(length) || length === 0) return false;
         }
-        if (attributesFilterState.width.value < 880) {
+        if (attributesFilterState.width.value < sliderMaxValues.width) {
             const width = parseFloat(bridge.width_out_to_out);
             if (isNaN(width) || width === 0) return false;
         }
-        if (attributesFilterState.area.value < 403000) {
+        if (attributesFilterState.area.value < sliderMaxValues.area) {
             const area = parseFloat(bridge.bridge_area);
             if (isNaN(area) || area === 0) return false;
         }
-        if (attributesFilterState.age.value < 210) {
+        if (attributesFilterState.age.value < sliderMaxValues.age) {
             const age = parseInt(bridge.bridge_age);
             if (isNaN(age) || age === 0) return false;
         }
-        if (attributesFilterState.adt.value < 150000) {
+        if (attributesFilterState.adt.value < sliderMaxValues.adt) {
             const adt = parseInt(bridge.adt);
             if (isNaN(adt) || adt === 0) return false;
         }
@@ -2991,7 +3023,7 @@ function bridgePassesAttributesFilter(bridge) {
     if (attributesFilterState.age.mode === 'gte' && age < attributesFilterState.age.value) return false;
 
     // ADT filter
-    if (attributesFilterState.adt.value < 150000) {
+    if (attributesFilterState.adt.value < sliderMaxValues.adt) {
         const adt = parseInt(bridge.adt) || 0;
         if (attributesFilterState.adt.mode === 'lte' && adt > attributesFilterState.adt.value) return false;
         if (attributesFilterState.adt.mode === 'gte' && adt < attributesFilterState.adt.value) return false;
@@ -3003,31 +3035,26 @@ function bridgePassesAttributesFilter(bridge) {
     
     // Utilities filter
     if (attributesFilterState.utilities && bridge.utilities_on_bridge !== 'Yes') return false;
-    
-    // On Bridge filter
+
+    // Bridge Type filter
+    if (attributesFilterState.bridgeType.length > 0) {
+        if (!attributesFilterState.bridgeType.includes(bridge.bridge_type_code || '')) return false;
+    }
+
+    // On Bridge filter — AND logic (all checked categories must match)
     if (attributesFilterState.onBridge.length > 0) {
         const onBridge = (bridge.on_bridge || '').charAt(0);
-        let matches = false;
         for (const values of attributesFilterState.onBridge) {
-            if (values.includes(onBridge)) {
-                matches = true;
-                break;
-            }
+            if (!values.includes(onBridge)) return false;
         }
-        if (!matches) return false;
     }
-    
-    // Under Bridge filter
+
+    // Under Bridge filter — AND logic (all checked categories must match)
     if (attributesFilterState.underBridge.length > 0) {
         const underBridge = (bridge.under_bridge || '').charAt(0);
-        let matches = false;
         for (const values of attributesFilterState.underBridge) {
-            if (values.includes(underBridge)) {
-                matches = true;
-                break;
-            }
+            if (!values.includes(underBridge)) return false;
         }
-        if (!matches) return false;
     }
     
     // Route filter — startsWith after stripping leading zeros
@@ -3049,18 +3076,23 @@ function bridgePassesAttributesFilter(bridge) {
 // Quantile-based slider scaling — each 1% of slider = ~1% of bridge population
 // Built from actual data distribution after bridgesData loads
 const quantileTables = {};
+const sliderMaxValues = { length: 4020, width: 880, area: 403000, age: 210, adt: 150000 };
 
 function buildQuantileTables() {
     const fields = {
-        length: { getter: b => parseFloat(b.bridge_length) || 0, max: 4020 },
-        width:  { getter: b => parseFloat(b.width_out_to_out) || 0, max: 880 },
-        area:   { getter: b => parseFloat(b.bridge_area) || 0, max: 403000 },
-        age:    { getter: b => parseInt(b.bridge_age) || 0, max: 210 },
-        adt:    { getter: b => parseInt(b.adt) || 0, max: 150000 }
+        length: { getter: b => parseFloat(b.bridge_length) || 0, round: v => Math.ceil(v / 10) * 10 },
+        width:  { getter: b => parseFloat(b.width_out_to_out) || 0, round: v => Math.ceil(v / 10) * 10 },
+        area:   { getter: b => parseFloat(b.bridge_area) || 0, round: v => Math.ceil(v / 1000) * 1000 },
+        age:    { getter: b => parseInt(b.bridge_age) || 0, round: v => Math.ceil(v / 10) * 10 },
+        adt:    { getter: b => parseInt(b.adt) || 0, round: v => Math.ceil(v / 1000) * 1000 }
     };
 
+    // Compute max from data
     Object.entries(fields).forEach(([key, cfg]) => {
         const values = bridgesData.map(cfg.getter).filter(v => v > 0).sort((a, b) => a - b);
+        const rawMax = Math.max(...values);
+        sliderMaxValues[key] = cfg.round(rawMax);
+
         // Build 101-point table (positions 0-100)
         const table = new Array(101);
         table[0] = 0;
@@ -3068,17 +3100,103 @@ function buildQuantileTables() {
             const idx = Math.min(Math.round((i / 100) * (values.length - 1)), values.length - 1);
             table[i] = Math.round(values[idx]);
         }
-        // Smooth ramp from p97 data value to hardcoded max over positions 98-100
-        // Prevents a massive jump at the last slider tick
+        // Smooth ramp from p97 data value to computed max over positions 98-100
         const p97val = table[97];
-        table[98] = Math.round(p97val + (cfg.max - p97val) * 0.33);
-        table[99] = Math.round(p97val + (cfg.max - p97val) * 0.66);
-        table[100] = cfg.max;
+        table[98] = Math.round(p97val + (sliderMaxValues[key] - p97val) * 0.33);
+        table[99] = Math.round(p97val + (sliderMaxValues[key] - p97val) * 0.66);
+        table[100] = sliderMaxValues[key];
         quantileTables[key] = table;
     });
 
-    console.log('✓ Built quantile tables for slider normalization');
+    // Update filter state defaults to use computed maxes
+    attributesFilterState.length.value = sliderMaxValues.length;
+    attributesFilterState.width.value = sliderMaxValues.width;
+    attributesFilterState.area.value = sliderMaxValues.area;
+    attributesFilterState.age.value = sliderMaxValues.age;
+    attributesFilterState.adt.value = sliderMaxValues.adt;
+
+    console.log('✓ Built quantile tables for slider normalization', sliderMaxValues);
 }
+
+function updateSliderLabels() {
+    const labels = {
+        length: { id: 'max-label-length', valueId: 'value-length', fmt: v => v.toLocaleString() + ' ft', maxFmt: v => v.toLocaleString() },
+        width:  { id: 'max-label-width',  valueId: 'value-width',  fmt: v => v.toLocaleString() + ' ft', maxFmt: v => v.toLocaleString() },
+        area:   { id: 'max-label-area',   valueId: 'value-area',   fmt: v => v.toLocaleString() + ' ft<sup>2</sup>', maxFmt: v => v.toLocaleString() },
+        age:    { id: 'max-label-age',    valueId: 'value-age',    fmt: v => v.toLocaleString() + ' years', maxFmt: v => v.toLocaleString() },
+        adt:    { id: 'max-label-adt',    valueId: 'value-adt',    fmt: v => v.toLocaleString(), maxFmt: v => v.toLocaleString() }
+    };
+    Object.entries(labels).forEach(([key, cfg]) => {
+        const maxLabel = document.getElementById(cfg.id);
+        if (maxLabel) maxLabel.textContent = cfg.maxFmt(sliderMaxValues[key]);
+        const valueEl = document.getElementById(cfg.valueId);
+        if (valueEl) {
+            if (key === 'area') {
+                valueEl.innerHTML = cfg.fmt(sliderMaxValues[key]);
+            } else {
+                valueEl.textContent = cfg.fmt(sliderMaxValues[key]);
+            }
+        }
+    });
+}
+
+let bridgeTypeCounts = {};
+let bridgeTypeSortMode = 'count'; // 'alpha' or 'count'
+
+function buildBridgeTypeCheckboxes() {
+    // Count occurrences of each bridge_type_code
+    bridgeTypeCounts = {};
+    bridgesData.forEach(b => {
+        const code = b.bridge_type_code || '';
+        if (code) {
+            bridgeTypeCounts[code] = (bridgeTypeCounts[code] || 0) + 1;
+        }
+    });
+
+    renderBridgeTypeCheckboxes();
+    console.log(`✓ Built ${Object.keys(bridgeTypeCounts).length} bridge type checkboxes`);
+}
+
+function renderBridgeTypeCheckboxes() {
+    const container = document.getElementById('bridge-type-checkboxes');
+    if (!container) return;
+
+    // Sort based on current mode
+    const codes = Object.keys(bridgeTypeCounts);
+    if (bridgeTypeSortMode === 'alpha') {
+        codes.sort();
+    } else {
+        codes.sort((a, b) => bridgeTypeCounts[b] - bridgeTypeCounts[a] || a.localeCompare(b));
+    }
+
+    // Preserve checked state
+    const checked = new Set(attributesFilterState.bridgeType);
+
+    // Generate checkbox HTML
+    container.innerHTML = codes.map(code =>
+        `<label class="checkbox-label" style="display: block; padding: 2px 0; font-size: 9pt; white-space: nowrap;">` +
+        `<input type="checkbox" class="bridge-type-cb" value="${code}"${checked.has(code) ? ' checked' : ''} style="margin-right: 6px;">` +
+        `${code} <span style="color: rgba(255,255,255,0.5);">(${bridgeTypeCounts[code]})</span></label>`
+    ).join('');
+
+    // Attach change listeners
+    container.querySelectorAll('.bridge-type-cb').forEach(cb => {
+        cb.addEventListener('change', function() {
+            if (this.checked) {
+                attributesFilterState.bridgeType.push(this.value);
+            } else {
+                attributesFilterState.bridgeType = attributesFilterState.bridgeType.filter(v => v !== this.value);
+            }
+            applyAttributesFilter();
+        });
+    });
+}
+
+window.toggleBridgeTypeSort = function() {
+    bridgeTypeSortMode = bridgeTypeSortMode === 'alpha' ? 'count' : 'alpha';
+    document.getElementById('bridge-type-sort-toggle').textContent = bridgeTypeSortMode === 'alpha' ? '#' : 'A-Z';
+    renderBridgeTypeCheckboxes();
+};
 
 function sliderToValue(position, min, max, field) {
     if (field && quantileTables[field]) {
@@ -3118,14 +3236,14 @@ function valueToSlider(value, min, max, field) {
 // Handle Length/Width/Area mutual exclusivity
 // Logic: Can use any 2, but not all 3
 function checkDimensionSliders() {
-    const lengthActive = attributesFilterState.length.value < 4020;
-    const widthActive = attributesFilterState.width.value < 880;
-    const areaActive = attributesFilterState.area.value < 403000;
-    
+    const lengthActive = attributesFilterState.length.value < sliderMaxValues.length;
+    const widthActive = attributesFilterState.width.value < sliderMaxValues.width;
+    const areaActive = attributesFilterState.area.value < sliderMaxValues.area;
+
     const areaSlider = document.getElementById('slider-area');
     const lengthSlider = document.getElementById('slider-length');
     const widthSlider = document.getElementById('slider-width');
-    
+
     // If Length AND Width are BOTH active, disable Area
     if (lengthActive && widthActive) {
         if (areaSlider) {
@@ -3135,8 +3253,8 @@ function checkDimensionSliders() {
         }
         // Reset area to max
         if (areaActive) {
-            attributesFilterState.area.value = 403000;
-            document.getElementById('value-area').innerHTML = '403,000 ft<sup>2</sup>';
+            attributesFilterState.area.value = sliderMaxValues.area;
+            document.getElementById('value-area').innerHTML = sliderMaxValues.area.toLocaleString() + ' ft<sup>2</sup>';
             areaSlider.value = areaSlider.max;
         }
     } else {
@@ -3147,7 +3265,7 @@ function checkDimensionSliders() {
             areaSlider.style.cursor = 'pointer';
         }
     }
-    
+
     // If Length AND Area are BOTH active, disable Width
     if (lengthActive && areaActive) {
         if (widthSlider) {
@@ -3157,8 +3275,8 @@ function checkDimensionSliders() {
         }
         // Reset width to max
         if (widthActive) {
-            attributesFilterState.width.value = 880;
-            document.getElementById('value-width').textContent = '880 ft';
+            attributesFilterState.width.value = sliderMaxValues.width;
+            document.getElementById('value-width').textContent = sliderMaxValues.width.toLocaleString() + ' ft';
             widthSlider.value = 100;
         }
     } else {
@@ -3179,8 +3297,8 @@ function checkDimensionSliders() {
         }
         // Reset length to max
         if (lengthActive) {
-            attributesFilterState.length.value = 4020;
-            document.getElementById('value-length').textContent = '4,020 ft';
+            attributesFilterState.length.value = sliderMaxValues.length;
+            document.getElementById('value-length').textContent = sliderMaxValues.length.toLocaleString() + ' ft';
             lengthSlider.value = 100;
         }
     } else {
@@ -3496,6 +3614,11 @@ function calculateMaxBridgeCounts() {
         // Attributes filter
         if (typeof attributesFilterState !== 'undefined' && attributesFilterState.active) {
             if (!bridgePassesAttributesFilter(bridge)) return;
+        }
+
+        // HUB filter
+        if (hubFilterState.active) {
+            if (!bridgePassesHubFilter(bars)) return;
         }
 
         // Box select exclusion
@@ -6155,7 +6278,7 @@ function checkMothmanDay(force) {
 
     // Mothman eyes — two large red glowing circles
     const eyesContainer = document.createElement('div');
-    eyesContainer.style.cssText = 'display:flex;gap:60px;margin-bottom:60px;opacity:0;transition:opacity 2s ease 1s;';
+    eyesContainer.style.cssText = 'display:flex;gap:60px;margin-bottom:200px;opacity:0;transition:opacity 2s ease 3s;';
 
     const leftEye = document.createElement('div');
     leftEye.style.cssText = 'width:96px;height:96px;border-radius:50%;background:radial-gradient(circle,#ff0000 30%,#cc0000 60%,#660000 100%);box-shadow:0 0 40px #ff0000,0 0 80px #ff0000,0 0 120px rgba(255,0,0,0.5);animation:mothmanPulse 3s ease-in-out infinite;';
@@ -6169,7 +6292,7 @@ function checkMothmanDay(force) {
 
     // History text
     const textBlock = document.createElement('div');
-    textBlock.style.cssText = 'max-width:560px;text-align:center;opacity:0;transition:opacity 2s ease 3s;padding:0 20px;';
+    textBlock.style.cssText = 'max-width:560px;text-align:center;opacity:0;transition:opacity 2s ease 1s;padding:20px;border:1px solid rgba(255,0,0,0.2);border-radius:6px;';
     textBlock.innerHTML =
         '<div style="color:#cc0000;font-size:12pt;font-weight:600;letter-spacing:3px;margin-bottom:20px;text-transform:uppercase;">December 15, 1967</div>' +
         '<div style="color:#ff3333;font-size:11pt;line-height:1.8;margin-bottom:20px;">' +
@@ -6178,7 +6301,6 @@ function checkMothmanDay(force) {
         '<div style="color:#cc0000;font-size:10pt;line-height:1.8;margin-bottom:30px;font-style:italic;">' +
         'In the thirteen months before the collapse, residents reported sightings of a large, winged creature with glowing red eyes near the bridge. They called it the Mothman.' +
         '</div>' +
-        '<div style="color:#ff0000;font-size:16pt;font-weight:700;letter-spacing:4px;margin-bottom:30px;text-shadow:0 0 20px rgba(255,0,0,0.6);">He tried to warn them.</div>' +
         '<div style="color:rgba(255,255,255,0.2);font-size:9pt;margin-top:20px;">Click anywhere to continue</div>';
     overlay.appendChild(textBlock);
 
@@ -6190,12 +6312,20 @@ function checkMothmanDay(force) {
 
     document.body.appendChild(overlay);
 
-    // Fade in sequence
+    // Fade in sequence — double rAF ensures browser registers opacity:0 first
     requestAnimationFrame(function() {
-        overlay.style.opacity = '1';
-        eyesContainer.style.opacity = '1';
-        textBlock.style.opacity = '1';
+        requestAnimationFrame(function() {
+            overlay.style.opacity = '1';
+            textBlock.style.opacity = '1';
+            eyesContainer.style.opacity = '1';
+        });
     });
+
+    // Eyes fade out very slowly after appearing
+    setTimeout(function() {
+        eyesContainer.style.transition = 'opacity 12s ease';
+        eyesContainer.style.opacity = '0';
+    }, 8000);
 
     // Click to dismiss
     overlay.addEventListener('click', function() {
@@ -6207,5 +6337,246 @@ function checkMothmanDay(force) {
     });
 }
 
+// ===== HUB FILTER SYSTEM =====
 
+const hubFilterState = {
+    active: false,
+    statuses: [],
+    phases: [],
+    allocations: [],
+    familyCodes: []
+};
+
+let hubAllocCounts = {};
+let hubAllocSortMode = 'count';
+let hubFamilyCounts = {};
+let hubFamilySortMode = 'count';
+
+function buildHubFilterUI() {
+    // Collect unique values and counts across all hub projects
+    const statusCounts = {};
+    const phaseCounts = {};
+    hubAllocCounts = {};
+    hubFamilyCounts = {};
+
+    Object.values(hubData).forEach(projects => {
+        projects.forEach(p => {
+            const status = p.project_status || 'Unknown';
+            statusCounts[status] = (statusCounts[status] || 0) + 1;
+
+            const phase = p.phase ? p.phase.substring(0, 2) : '';
+            if (phase) phaseCounts[phase] = (phaseCounts[phase] || 0) + 1;
+
+            const alloc = p.allocation || '';
+            if (alloc) hubAllocCounts[alloc] = (hubAllocCounts[alloc] || 0) + 1;
+
+            const family = p.family_code || '';
+            if (family) hubFamilyCounts[family] = (hubFamilyCounts[family] || 0) + 1;
+        });
+    });
+
+    // Build status checkboxes
+    const statusContainer = document.getElementById('hub-status-checkboxes');
+    if (statusContainer) {
+        const sorted = Object.keys(statusCounts).sort((a, b) => statusCounts[b] - statusCounts[a]);
+        statusContainer.innerHTML = sorted.map(s =>
+            '<label class="checkbox-label" style="display: block; padding: 2px 0; font-size: 9pt; white-space: nowrap;">' +
+            '<input type="checkbox" class="hub-status-cb" value="' + s + '" style="margin-right: 6px;">' +
+            s + ' <span style="color: rgba(255,255,255,0.5);">(' + statusCounts[s] + ')</span></label>'
+        ).join('');
+        statusContainer.querySelectorAll('.hub-status-cb').forEach(cb => {
+            cb.addEventListener('change', function() {
+                if (this.checked) hubFilterState.statuses.push(this.value);
+                else hubFilterState.statuses = hubFilterState.statuses.filter(v => v !== this.value);
+                applyHubFilter();
+            });
+        });
+    }
+
+    // Build phase checkboxes
+    const phaseContainer = document.getElementById('hub-phase-checkboxes');
+    if (phaseContainer) {
+        const phaseLabels = { CN: 'Construction', EN: 'Engineering', RW: 'Right-of-Way', OT: 'Other' };
+        const sorted = Object.keys(phaseCounts).sort((a, b) => phaseCounts[b] - phaseCounts[a]);
+        phaseContainer.innerHTML = sorted.map(p =>
+            '<label class="checkbox-label" style="display: block; padding: 2px 0; font-size: 9pt; white-space: nowrap;">' +
+            '<input type="checkbox" class="hub-phase-cb" value="' + p + '" style="margin-right: 6px;">' +
+            (phaseLabels[p] || p) + ' <span style="color: rgba(255,255,255,0.5);">(' + phaseCounts[p] + ')</span></label>'
+        ).join('');
+        phaseContainer.querySelectorAll('.hub-phase-cb').forEach(cb => {
+            cb.addEventListener('change', function() {
+                if (this.checked) hubFilterState.phases.push(this.value);
+                else hubFilterState.phases = hubFilterState.phases.filter(v => v !== this.value);
+                applyHubFilter();
+            });
+        });
+    }
+
+    // Build allocation and family code checkboxes
+    renderHubAllocCheckboxes();
+    renderHubFamilyCheckboxes();
+
+    // Update match count
+    const totalBridges = Object.keys(hubData).length;
+    const el = document.getElementById('hub-match-count');
+    if (el) el.textContent = totalBridges.toLocaleString() + ' bridges with HUB data';
+
+    console.log('✓ Built HUB filter UI');
+}
+
+function renderHubAllocCheckboxes() {
+    const container = document.getElementById('hub-alloc-checkboxes');
+    if (!container) return;
+
+    const codes = Object.keys(hubAllocCounts);
+    if (hubAllocSortMode === 'alpha') codes.sort();
+    else codes.sort((a, b) => hubAllocCounts[b] - hubAllocCounts[a] || a.localeCompare(b));
+
+    const checked = new Set(hubFilterState.allocations);
+    // Shorten allocation labels: "E21-061-FA Bridge, Cat 1, OM" -> "E21-061 (Cat 1)"
+    container.innerHTML = codes.map(code => {
+        const shortLabel = code.split('-').slice(0, 2).join('-');
+        return '<label class="checkbox-label" style="display: block; padding: 2px 0; font-size: 9pt; white-space: nowrap;">' +
+            '<input type="checkbox" class="hub-alloc-cb" value="' + code + '"' + (checked.has(code) ? ' checked' : '') + ' style="margin-right: 6px;">' +
+            shortLabel + ' <span style="color: rgba(255,255,255,0.5);">(' + hubAllocCounts[code] + ')</span></label>';
+    }).join('');
+
+    container.querySelectorAll('.hub-alloc-cb').forEach(cb => {
+        cb.addEventListener('change', function() {
+            if (this.checked) hubFilterState.allocations.push(this.value);
+            else hubFilterState.allocations = hubFilterState.allocations.filter(v => v !== this.value);
+            applyHubFilter();
+        });
+    });
+}
+
+function renderHubFamilyCheckboxes() {
+    const container = document.getElementById('hub-family-checkboxes');
+    if (!container) return;
+
+    const codes = Object.keys(hubFamilyCounts);
+    if (hubFamilySortMode === 'alpha') codes.sort();
+    else codes.sort((a, b) => hubFamilyCounts[b] - hubFamilyCounts[a] || a.localeCompare(b));
+
+    const checked = new Set(hubFilterState.familyCodes);
+    container.innerHTML = codes.map(code => {
+        const shortLabel = code.split('-')[0];
+        return '<label class="checkbox-label" style="display: block; padding: 2px 0; font-size: 9pt; white-space: nowrap;">' +
+            '<input type="checkbox" class="hub-family-cb" value="' + code + '"' + (checked.has(code) ? ' checked' : '') + ' style="margin-right: 6px;">' +
+            shortLabel + ' <span style="color: rgba(255,255,255,0.5);">(' + hubFamilyCounts[code] + ')</span></label>';
+    }).join('');
+
+    container.querySelectorAll('.hub-family-cb').forEach(cb => {
+        cb.addEventListener('change', function() {
+            if (this.checked) hubFilterState.familyCodes.push(this.value);
+            else hubFilterState.familyCodes = hubFilterState.familyCodes.filter(v => v !== this.value);
+            applyHubFilter();
+        });
+    });
+}
+
+window.toggleHubAllocSort = function() {
+    hubAllocSortMode = hubAllocSortMode === 'alpha' ? 'count' : 'alpha';
+    document.getElementById('hub-alloc-sort-toggle').textContent = hubAllocSortMode === 'alpha' ? '#' : 'A-Z';
+    renderHubAllocCheckboxes();
+};
+
+window.toggleHubFamilySort = function() {
+    hubFamilySortMode = hubFamilySortMode === 'alpha' ? 'count' : 'alpha';
+    document.getElementById('hub-family-sort-toggle').textContent = hubFamilySortMode === 'alpha' ? '#' : 'A-Z';
+    renderHubFamilyCheckboxes();
+};
+
+function applyHubFilter() {
+    const isActive =
+        hubFilterState.statuses.length > 0 ||
+        hubFilterState.phases.length > 0 ||
+        hubFilterState.allocations.length > 0 ||
+        hubFilterState.familyCodes.length > 0;
+
+    hubFilterState.active = isActive;
+
+    // Update bridge visibility
+    updateBridgeSizes();
+
+    // Update match count
+    if (isActive) {
+        let count = 0;
+        Object.keys(hubData).forEach(bars => {
+            if (bridgePassesHubFilter(bars)) count++;
+        });
+        const el = document.getElementById('hub-match-count');
+        if (el) el.textContent = count.toLocaleString() + ' / ' + Object.keys(hubData).length.toLocaleString() + ' HUB bridges';
+    } else {
+        const el = document.getElementById('hub-match-count');
+        if (el) el.textContent = Object.keys(hubData).length.toLocaleString() + ' bridges with HUB data';
+    }
+
+    if (isActive) {
+        autoZoomToFilteredBridges();
+    }
+}
+
+function bridgePassesHubFilter(bars) {
+    if (!hubFilterState.active) return true;
+
+    const projects = hubData[bars];
+    if (!projects || projects.length === 0) return false;
+
+    // Bridge passes if ANY of its projects match ALL active filter categories
+    return projects.some(p => {
+        if (hubFilterState.statuses.length > 0) {
+            if (!hubFilterState.statuses.includes(p.project_status)) return false;
+        }
+        if (hubFilterState.phases.length > 0) {
+            const phase = p.phase ? p.phase.substring(0, 2) : '';
+            if (!hubFilterState.phases.includes(phase)) return false;
+        }
+        if (hubFilterState.allocations.length > 0) {
+            if (!hubFilterState.allocations.includes(p.allocation)) return false;
+        }
+        if (hubFilterState.familyCodes.length > 0) {
+            if (!hubFilterState.familyCodes.includes(p.family_code)) return false;
+        }
+        return true;
+    });
+}
+
+window.resetHubFilter = function() {
+    hubFilterState.statuses = [];
+    hubFilterState.phases = [];
+    hubFilterState.allocations = [];
+    hubFilterState.familyCodes = [];
+    hubFilterState.active = false;
+
+    document.querySelectorAll('.hub-status-cb, .hub-phase-cb, .hub-alloc-cb, .hub-family-cb').forEach(cb => cb.checked = false);
+
+    const el = document.getElementById('hub-match-count');
+    if (el) el.textContent = Object.keys(hubData).length.toLocaleString() + ' bridges with HUB data';
+
+    updateBridgeSizes();
+};
+
+// HUB panel toggle
+window.toggleHubPanel = function() {
+    const hubPanel = document.getElementById('hubPanel');
+    const attrPanel = document.getElementById('attributesPanel');
+    const condPanel = document.getElementById('evaluationPanel');
+
+    const hubIsOnTop = hubPanel.classList.contains('ontop');
+    const hubIsOpen = hubPanel.classList.contains('open');
+
+    if (hubIsOpen && hubIsOnTop) {
+        // HUB already showing - close all
+        hubPanel.classList.remove('open', 'ontop');
+        attrPanel.classList.remove('open', 'ontop');
+        condPanel.classList.remove('open', 'behind');
+    } else {
+        // Open HUB on top
+        hubPanel.classList.add('open', 'ontop');
+        attrPanel.classList.add('open');
+        attrPanel.classList.remove('ontop');
+        condPanel.classList.add('open', 'behind');
+    }
+};
 
