@@ -146,6 +146,8 @@ async function init() {
         });
         
         initBoxSelect();
+        initEasterEggs();
+        checkMothmanDay();
 
         document.getElementById('loading').style.display = 'none';
         console.log('✓ SpanBase ready');
@@ -385,9 +387,24 @@ function showNameTooltip(e, bridge) {
         ${bridgeName} | ${bars}
         <div style="position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 8px solid transparent; border-right: 8px solid transparent; border-top: 8px solid ${bridgeColor};"></div>
     `;
-    
+
     document.getElementById('map').appendChild(tooltip);
     nameTooltip = tooltip;
+}
+
+// Easter egg: Rick Roll popup
+function showRickRoll() {
+    const existing = document.getElementById('rickroll-popup');
+    if (existing) existing.remove();
+    const popup = document.createElement('div');
+    popup.id = 'rickroll-popup';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:#000;border:3px solid var(--wvdoh-yellow);border-radius:12px;padding:8px;box-shadow:0 8px 40px rgba(0,0,0,0.8);';
+    popup.innerHTML = '<div style="position:relative;">' +
+        '<button onclick="document.getElementById(\'rickroll-popup\').remove()" style="position:absolute;top:-4px;right:2px;background:none;border:none;color:#fff;font-size:16pt;cursor:pointer;z-index:1;">✕</button>' +
+        '<iframe width="480" height="270" src="https://www.youtube.com/embed/Ay8lynMZ4mE?autoplay=1" frameborder="0" allow="autoplay;encrypted-media" allowfullscreen></iframe>' +
+        '<div style="text-align:center;color:var(--wvdoh-yellow);font-size:16pt;font-weight:600;padding:8px 0;">This bridge is never gonna let you down.</div>' +
+        '</div>';
+    document.body.appendChild(popup);
 }
 
 function removeNameTooltip() {
@@ -2745,6 +2762,20 @@ document.addEventListener('DOMContentLoaded', function() {
     const routeSearch = document.getElementById('route-search');
     if (routeSearch) {
         routeSearch.addEventListener('input', function() {
+            const val = this.value.trim().toLowerCase();
+            // Easter eggs
+            if (val === 'rick' || val === 'astley' || val === 'rick astley') {
+                showRickRoll();
+                return;
+            }
+            if (val === '42') {
+                showHitchhikerEgg();
+                return;
+            }
+            if (val === 'wv' || val === 'country roads') {
+                showCountryRoadsEgg();
+                return;
+            }
             attributesFilterState.route = this.value.trim();
             applyAttributesFilter();
             if (this.value.trim().length > 0) {
@@ -3206,7 +3237,7 @@ function buildCountReportButtons(mode) {
                 <div style="display: flex; align-items: center; gap: 6px;">
                     <span style="${countStyle}" id="count-critical">0</span>
                     <span onclick="event.stopPropagation(); showCategoryTable('critical')"
-                          style="cursor:pointer; font-size:9pt; opacity:0.6;" title="View table">☰</span>
+                          style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
                 </div>
             </button>`;
             html += `<button id="btn-emergent" onclick="toggleCountCategory('emergent')" style="${btnStyle}">
@@ -3217,7 +3248,7 @@ function buildCountReportButtons(mode) {
                 <div style="display: flex; align-items: center; gap: 6px;">
                     <span style="${countStyle}" id="count-emergent">0</span>
                     <span onclick="event.stopPropagation(); showCategoryTable('emergent')"
-                          style="cursor:pointer; font-size:9pt; opacity:0.6;" title="View table">☰</span>
+                          style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
                 </div>
             </button>`;
             html += `<button id="btn-satisfactory" onclick="toggleCountCategory('satisfactory')" style="${btnStyle}">
@@ -3228,7 +3259,7 @@ function buildCountReportButtons(mode) {
                 <div style="display: flex; align-items: center; gap: 6px;">
                     <span style="${countStyle}" id="count-satisfactory">0</span>
                     <span onclick="event.stopPropagation(); showCategoryTable('satisfactory')"
-                          style="cursor:pointer; font-size:9pt; opacity:0.6;" title="View table">☰</span>
+                          style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
                 </div>
             </button>`;
         } else {
@@ -3241,7 +3272,7 @@ function buildCountReportButtons(mode) {
                 <div style="display: flex; align-items: center; gap: 6px;">
                     <span style="${countStyle}" id="count-critical">0</span>
                     <span onclick="event.stopPropagation(); showMaintenanceCategoryTable('critical')"
-                          style="cursor:pointer; font-size:9pt; opacity:0.6;" title="View table">☰</span>
+                          style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
                 </div>
             </button>`;
             html += `<button id="btn-emergent" onclick="toggleCountCategory('emergent')" style="${btnStyle}">
@@ -3252,7 +3283,7 @@ function buildCountReportButtons(mode) {
                 <div style="display: flex; align-items: center; gap: 6px;">
                     <span style="${countStyle}" id="count-emergent">0</span>
                     <span onclick="event.stopPropagation(); showMaintenanceCategoryTable('emergent')"
-                          style="cursor:pointer; font-size:9pt; opacity:0.6;" title="View table">☰</span>
+                          style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
                 </div>
             </button>`;
             html += `<button id="btn-satisfactory" onclick="toggleCountCategory('satisfactory')" style="${btnStyle}">
@@ -3263,7 +3294,7 @@ function buildCountReportButtons(mode) {
                 <div style="display: flex; align-items: center; gap: 6px;">
                     <span style="${countStyle}" id="count-satisfactory">0</span>
                     <span onclick="event.stopPropagation(); showMaintenanceCategoryTable('satisfactory')"
-                          style="cursor:pointer; font-size:9pt; opacity:0.6;" title="View table">☰</span>
+                          style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
                 </div>
             </button>`;
         }
@@ -5825,4 +5856,313 @@ function clearBoxSelect() {
     if (indicator) indicator.remove();
     updateBridgeSizes();
 }
+
+// ═══════════════════════════════════════════════════════
+// EASTER EGGS
+// ═══════════════════════════════════════════════════════
+
+function initEasterEggs() {
+    // Konami Code: ↑↑↓↓←→←→BA
+    const konamiSequence = [38,38,40,40,37,39,37,39,66,65];
+    let konamiIndex = 0;
+    document.addEventListener('keydown', function(e) {
+        if (e.keyCode === konamiSequence[konamiIndex]) {
+            konamiIndex++;
+            if (konamiIndex === konamiSequence.length) {
+                konamiIndex = 0;
+                triggerKonamiEgg();
+            }
+        } else {
+            konamiIndex = 0;
+        }
+    });
+
+    // Matrix: click header title 7 times
+    let headerClicks = 0;
+    let headerClickTimer = null;
+    const headerTitle = document.querySelector('.header h1');
+    if (headerTitle) {
+        headerTitle.style.cursor = 'default';
+        headerTitle.addEventListener('click', function() {
+            headerClicks++;
+            clearTimeout(headerClickTimer);
+            headerClickTimer = setTimeout(function() { headerClicks = 0; }, 2000);
+            if (headerClicks >= 7) {
+                headerClicks = 0;
+                triggerMatrixEgg();
+            }
+        });
+    }
+
+}
+
+// Hitchhiker's Guide — route search "42"
+function showHitchhikerEgg() {
+    const existing = document.getElementById('egg-popup');
+    if (existing) existing.remove();
+    const popup = document.createElement('div');
+    popup.id = 'egg-popup';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:url(galaxy42.jpg) center/cover no-repeat;border:3px solid var(--wvdoh-yellow);border-radius:12px;padding:30px 40px;box-shadow:0 8px 40px rgba(0,0,0,0.8);text-align:center;width:570px;';
+    popup.innerHTML =
+        '<button onclick="document.getElementById(\'egg-popup\').remove()" style="position:absolute;top:8px;right:12px;background:none;border:none;color:#fff;font-size:16pt;cursor:pointer;text-shadow:0 0 6px #000;">✕</button>' +
+        '<div style="font-size:48pt;margin-bottom:12px;text-shadow:0 0 20px rgba(0,0,0,0.9),0 0 40px rgba(0,0,0,0.7);">42</div>' +
+        '<div style="color:var(--wvdoh-yellow);font-size:14pt;font-weight:600;margin-bottom:8px;text-shadow:0 0 10px rgba(0,0,0,0.9),0 2px 4px rgba(0,0,0,0.8);">The Answer to Life, the Universe,<br>and Bridge Sufficiency.</div>' +
+        '<div style="color:rgba(255,255,255,0.8);font-size:9pt;font-style:italic;text-shadow:0 0 8px rgba(0,0,0,0.9);">Don\'t Panic.</div>';
+    document.body.appendChild(popup);
+}
+
+// Konami Code — Contra 30 lives reference
+function triggerKonamiEgg() {
+    // Chiptune sound
+    try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const melody = [523, 659, 784, 1047];
+        melody.forEach(function(freq, i) {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.frequency.value = freq;
+            osc.type = 'square';
+            gain.gain.value = 0.06;
+            osc.start(audioCtx.currentTime + i * 0.15);
+            osc.stop(audioCtx.currentTime + i * 0.15 + 0.12);
+        });
+    } catch(e) {}
+
+    const existing = document.getElementById('egg-popup');
+    if (existing) existing.remove();
+    const popup = document.createElement('div');
+    popup.id = 'egg-popup';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:#000;border:4px solid #fff;border-radius:0;padding:30px 50px;box-shadow:0 0 60px rgba(0,0,0,0.9);text-align:center;image-rendering:pixelated;';
+    popup.innerHTML =
+        '<div style="font-family:\'Courier New\',monospace;color:#fff;font-size:11pt;margin-bottom:12px;letter-spacing:2px;">PLAYER 1</div>' +
+        '<div style="font-family:\'Courier New\',monospace;color:#ff0;font-size:36pt;font-weight:900;letter-spacing:6px;text-shadow:3px 3px 0 #c00;margin-bottom:12px;">30 BRIDGES</div>' +
+        '<div style="font-family:\'Courier New\',monospace;color:#0f0;font-size:14pt;letter-spacing:3px;animation:blink8bit 0.6s infinite;">★ UNLOCKED ★</div>' +
+        '<div style="font-family:\'Courier New\',monospace;color:rgba(255,255,255,0.4);font-size:8pt;margin-top:16px;">↑ ↑ ↓ ↓ ← → ← → B A</div>' +
+        '<style>@keyframes blink8bit{0%,49%{opacity:1}50%,100%{opacity:0}}</style>';
+    document.body.appendChild(popup);
+    setTimeout(function() { if (popup.parentNode) popup.remove(); }, 4000);
+}
+
+// Matrix — green-on-black theme for 10 seconds
+function triggerMatrixEgg() {
+    const style = document.createElement('style');
+    style.id = 'matrix-egg-style';
+    style.textContent = `
+        * { transition: all 0.5s ease !important; }
+
+        /* Header */
+        .header { background: #000 !important; border-color: #00ff41 !important; }
+        .header-overlay { opacity: 0 !important; }
+        .header h1, .header .subtitle, .header .email a { color: #00ff41 !important; }
+        .header .search input { background: #000 !important; border-color: #00ff41 !important; color: #00ff41 !important; }
+        #version-label { color: #00ff41 !important; }
+
+        /* Last Updated box */
+        .last-updated { background: #000 !important; border-color: #00ff41 !important; color: #00ff41 !important; }
+
+        /* Map */
+        #map { filter: hue-rotate(90deg) saturate(3) !important; }
+        .leaflet-tile { filter: grayscale(1) brightness(0.3) !important; }
+
+        /* Panels */
+        .evaluation-panel, .attributes-panel { background: #000 !important; }
+        .panel-header { background: #000 !important; }
+        .panel-header h3 { color: #00ff41 !important; }
+        .panel-body { background: #000 !important; }
+        .folder-tab { background: #000 !important; }
+        .folder-tab-text { color: #00ff41 !important; }
+        .section-title, .slider-label, .checkbox-label { color: #00ff41 !important; }
+        .section-btn { background: #000 !important; color: #00ff41 !important; border-color: #00ff41 !important; }
+        .section-btn.active { background: #00ff41 !important; color: #000 !important; }
+
+        /* All panel sub-boxes (inline bg #003b5c) */
+        .panel-body div[style*="003b5c"],
+        .inspection-types-section,
+        .inspection-months-section,
+        .inspection-options-section,
+        #route-search-box,
+        .disabled-section,
+        .slider-group[style*="003b5c"] { background: #000 !important; border-color: #00ff41 !important; }
+
+        /* Inputs inside panels */
+        #route-search, #subroute-search { background: #000 !important; border-color: #00ff41 !important; color: #00ff41 !important; }
+        .slider-value { color: #00ff41 !important; }
+        .nhs-btn { background: #000 !important; border-color: #00ff41 !important; color: #00ff41 !important; }
+        .nhs-btn.active { background: #00ff41 !important; color: #000 !important; }
+        button[id*="-mode-toggle"] { background: #000 !important; border-color: #00ff41 !important; color: #00ff41 !important; }
+
+        /* Count Report */
+        #countReport { background: #000 !important; border-color: #00ff41 !important; }
+        #countReport button { background: #000 !important; border-color: #00ff41 !important; }
+        #countReport span { color: #00ff41 !important; }
+
+        /* Legend / Districts */
+        .legend { background: #000 !important; border-color: #00ff41 !important; }
+        .legend h4 { background: #000 !important; color: #00ff41 !important; }
+        .legend-item { color: #00ff41 !important; }
+        .legend-item:hover { border-color: #00ff41 !important; }
+
+        /* Hub data button */
+        #hub-data-btn { background: #000 !important; border-color: #00ff41 !important; color: #00ff41 !important; }
+
+        /* Sliders and checkboxes */
+        input[type="range"] { accent-color: #00ff41 !important; }
+        input[type="checkbox"] { accent-color: #00ff41 !important; }
+        .eval-slider::-webkit-slider-thumb { background: #00ff41 !important; }
+
+        /* Status bars */
+        .status-bar { background: #000 !important; border-color: #00ff41 !important; }
+        .status-bar span { color: #00ff41 !important; }
+
+        /* Leaflet SVG paths (bridge dots) */
+        .leaflet-interactive { stroke: #00ff41 !important; fill: #00ff41 !important; }
+    `;
+    document.head.appendChild(style);
+
+    // Random Matrix quote in last-updated box (different each time)
+    const matrixQuotes = [
+        'There is no spoon.',
+        'Wake up, Neo...',
+        'Follow the white rabbit.',
+        'The Matrix has you.',
+        'I know kung fu.',
+        'Free your mind.',
+        'Dodge this.',
+        'He is the One.',
+        'What is real?',
+        'Welcome to the desert of the real.'
+    ];
+    const lastUpdated = document.querySelector('.last-updated');
+    const originalUpdatedText = lastUpdated ? lastUpdated.textContent : '';
+    if (lastUpdated) lastUpdated.textContent = matrixQuotes[Math.floor(Math.random() * matrixQuotes.length)];
+
+    // Digital rain overlay
+    const canvas = document.createElement('canvas');
+    canvas.id = 'matrix-rain';
+    canvas.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:99998;pointer-events:none;opacity:0.15;';
+    document.body.appendChild(canvas);
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    const ctx = canvas.getContext('2d');
+    const columns = Math.floor(canvas.width / 14);
+    const drops = Array(columns).fill(1);
+    const chars = 'SPANBASE01アイウエオカキクケコ'.split('');
+
+    const rainInterval = setInterval(function() {
+        ctx.fillStyle = 'rgba(0,0,0,0.05)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#00ff41';
+        ctx.font = '12px monospace';
+        for (let i = 0; i < drops.length; i++) {
+            const char = chars[Math.floor(Math.random() * chars.length)];
+            ctx.fillText(char, i * 14, drops[i] * 14);
+            if (drops[i] * 14 > canvas.height && Math.random() > 0.975) drops[i] = 0;
+            drops[i]++;
+        }
+    }, 50);
+
+    setTimeout(function() {
+        clearInterval(rainInterval);
+        style.remove();
+        canvas.remove();
+        if (lastUpdated) {
+            lastUpdated.textContent = originalUpdatedText;
+            lastUpdated.style.color = '';
+            lastUpdated.style.background = '';
+            lastUpdated.style.borderColor = '';
+        }
+    }, 10000);
+}
+
+// Country Roads — route search "wv"
+function showCountryRoadsEgg() {
+    const existing = document.getElementById('egg-popup');
+    if (existing) existing.remove();
+    const popup = document.createElement('div');
+    popup.id = 'egg-popup';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:linear-gradient(135deg,#1a3a5c,#002244);border:3px solid var(--wvdoh-yellow);border-radius:12px;padding:10px;box-shadow:0 8px 40px rgba(0,0,0,0.8);text-align:center;';
+    popup.innerHTML =
+        '<div style="position:relative;">' +
+        '<button onclick="document.getElementById(\'egg-popup\').remove()" style="position:absolute;top:-4px;right:2px;background:none;border:none;color:#fff;font-size:16pt;cursor:pointer;z-index:1;">✕</button>' +
+        '<iframe width="480" height="270" src="https://www.youtube.com/embed/1vrEljMfXYo?autoplay=1&start=9" frameborder="0" allow="autoplay;encrypted-media" allowfullscreen></iframe>' +
+        '<div style="color:var(--wvdoh-yellow);font-size:14pt;font-weight:600;padding:8px 0;font-style:italic;">Country Roads...Take Me Home</div>' +
+        '<div style="color:rgba(255,255,255,0.5);font-size:9pt;">♫ Take Me Home, Country Roads — John Denver ♫</div>' +
+        '</div>';
+    document.body.appendChild(popup);
+    // Auto-close at 00:12 of the song (3s playback + ~3s iframe load buffer)
+    setTimeout(function() {
+        if (popup.parentNode) popup.remove();
+    }, 6000);
+}
+
+// ═══════════════════════════════════════════════════════
+// MOTHMAN — December 15th Memorial
+// ═══════════════════════════════════════════════════════
+
+function checkMothmanDay() {
+    const now = new Date();
+    if (now.getMonth() !== 11 || now.getDate() !== 15) return; // Dec = month 11
+
+    // Full-screen black overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'mothman-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:999999;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 1.5s ease;';
+
+    // Mothman eyes — two large red glowing circles
+    const eyesContainer = document.createElement('div');
+    eyesContainer.style.cssText = 'display:flex;gap:60px;margin-bottom:60px;opacity:0;transition:opacity 2s ease 1s;';
+
+    const leftEye = document.createElement('div');
+    leftEye.style.cssText = 'width:80px;height:80px;border-radius:50%;background:radial-gradient(circle,#ff0000 30%,#cc0000 60%,#660000 100%);box-shadow:0 0 40px #ff0000,0 0 80px #ff0000,0 0 120px rgba(255,0,0,0.5);animation:mothmanPulse 3s ease-in-out infinite;';
+
+    const rightEye = document.createElement('div');
+    rightEye.style.cssText = leftEye.style.cssText;
+
+    eyesContainer.appendChild(leftEye);
+    eyesContainer.appendChild(rightEye);
+    overlay.appendChild(eyesContainer);
+
+    // History text
+    const textBlock = document.createElement('div');
+    textBlock.style.cssText = 'max-width:560px;text-align:center;opacity:0;transition:opacity 2s ease 3s;padding:0 20px;';
+    textBlock.innerHTML =
+        '<div style="color:#cc0000;font-size:12pt;font-weight:600;letter-spacing:3px;margin-bottom:20px;text-transform:uppercase;">December 15, 1967</div>' +
+        '<div style="color:#ff3333;font-size:11pt;line-height:1.8;margin-bottom:20px;">' +
+        'The Silver Bridge connecting Point Pleasant, West Virginia to Gallipolis, Ohio collapsed during rush hour traffic, plunging 31 vehicles into the Ohio River. 46 people lost their lives.' +
+        '</div>' +
+        '<div style="color:#cc0000;font-size:10pt;line-height:1.8;margin-bottom:30px;font-style:italic;">' +
+        'In the thirteen months before the collapse, residents reported sightings of a large, winged creature with glowing red eyes near the bridge. They called it the Mothman.' +
+        '</div>' +
+        '<div style="color:#ff0000;font-size:16pt;font-weight:700;letter-spacing:4px;margin-bottom:30px;text-shadow:0 0 20px rgba(255,0,0,0.6);">He tried to warn them.</div>' +
+        '<div style="color:rgba(255,255,255,0.2);font-size:9pt;margin-top:20px;">Click anywhere to continue</div>';
+    overlay.appendChild(textBlock);
+
+    // Pulse animation
+    const pulseStyle = document.createElement('style');
+    pulseStyle.id = 'mothman-pulse-style';
+    pulseStyle.textContent = '@keyframes mothmanPulse { 0%,100% { box-shadow: 0 0 40px #ff0000, 0 0 80px #ff0000, 0 0 120px rgba(255,0,0,0.5); } 50% { box-shadow: 0 0 60px #ff0000, 0 0 100px #ff0000, 0 0 160px rgba(255,0,0,0.7); } }';
+    document.head.appendChild(pulseStyle);
+
+    document.body.appendChild(overlay);
+
+    // Fade in sequence
+    requestAnimationFrame(function() {
+        overlay.style.opacity = '1';
+        eyesContainer.style.opacity = '1';
+        textBlock.style.opacity = '1';
+    });
+
+    // Click to dismiss
+    overlay.addEventListener('click', function() {
+        overlay.style.opacity = '0';
+        setTimeout(function() {
+            overlay.remove();
+            pulseStyle.remove();
+        }, 1500);
+    });
+}
+
+
 

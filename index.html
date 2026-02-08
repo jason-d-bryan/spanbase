@@ -1050,7 +1050,7 @@
     </div>
     
     <div class="last-updated">
-        Last updated 02/07/26 08:45 PM
+        Last updated 02/08/26 03:30 PM
     </div>
     
     <div class="header">
@@ -1061,7 +1061,7 @@
         <div class="search">
             <input type="text" id="searchInput" placeholder="Search...">
         </div>
-        <div style="text-align: right; margin-top: 4px; margin-bottom: -12px; margin-right: -20px; color: #fff; font-size: 9pt; font-style: italic;">δ3</div>
+        <div id="version-label" style="text-align: right; margin-top: 4px; margin-bottom: -12px; margin-right: -20px; color: #fff; font-size: 9pt; font-style: italic; cursor: default;">δ3</div>
     </div>
     
     <div id="map"></div>
@@ -1078,6 +1078,17 @@
                 <a href="https://docs.google.com/document/d/1l2MDlr4IAMorvgPfq9pRG9IYsRgGcxOb/edit?usp=sharing&ouid=112943824375355142692&rtpof=true&sd=true" target="_blank" style="color: var(--wvdoh-yellow); font-size: 9pt; font-weight: 600; text-decoration: underline; letter-spacing: 0.5px;">User Manual</a>
                 <span style="color: rgba(255,255,255,0.3);">|</span>
                 <button id="tour-help-btn" onclick="startTour()" title="Take a guided tour">Tutorial</button>
+                <span style="color: rgba(255,255,255,0.3);">|</span>
+                <span id="egg-ref-toggle" onclick="document.getElementById('egg-ref-list').style.display = document.getElementById('egg-ref-list').style.display === 'none' ? 'block' : 'none';" style="color: rgba(255,255,255,0.25); font-size: 9pt; cursor: pointer; user-select: none;" title="Easter Eggs">?</span>
+            </div>
+            <div id="egg-ref-list" style="display:none; background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:8px 12px; margin-bottom:6px; font-size:8pt; color:rgba(255,255,255,0.6); line-height:1.8;">
+                <div style="color:var(--wvdoh-yellow);font-weight:600;margin-bottom:4px;font-size:9pt;">Easter Eggs</div>
+                1. Route search "rick" / "astley" &mdash; Rick Roll<br>
+                2. Route search "42" &mdash; Hitchhiker's Guide<br>
+                3. ↑↑↓↓←→←→BA (Konami Code) &mdash; Contra 30 Lives<br>
+                4. Route search "wv" / "country roads" &mdash; Country Roads<br>
+                5. Click "SpanBase" title 7x &mdash; Matrix<br>
+                6. December 15th &mdash; Mothman / Silver Bridge
             </div>
             <div class="section-switcher">
                 <button class="section-btn maintenance active" onclick="switchSection('maintenance')">Maintenance</button>
