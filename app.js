@@ -478,14 +478,19 @@ function showRadialMenu(latlng, bridge) {
     const bridgeName = cleanBridgeName(bridge.bridge_name);
     const titleCaseName = bridgeName.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 
-    const seasonIdx = getNrgSeasonIndex();
-    const seasonImg = nrgSeasonImages[seasonIdx];
-    const seasonPos = nrgSeasonPositions[seasonIdx];
-    const seasonBorder = nrgSeasonBorders[seasonIdx];
-    title.style.borderColor = seasonBorder;
-    title.style.borderWidth = nrgSeasonBorderWidths[seasonIdx];
-    title.innerHTML = `
-        <div class="menu-title-bg" style="background-image: url('${seasonImg}'); background-position: ${seasonPos};"></div>
+    const isNRG = bridge.bars_number === '10A214';
+    if (isNRG) {
+        const seasonIdx = getNrgSeasonIndex();
+        const seasonImg = nrgSeasonImages[seasonIdx];
+        const seasonPos = nrgSeasonPositions[seasonIdx];
+        title.style.borderColor = nrgSeasonBorders[seasonIdx];
+        title.style.borderWidth = nrgSeasonBorderWidths[seasonIdx];
+        title.innerHTML = `
+            <div class="menu-title-bg" style="background-image: url('${seasonImg}'); background-position: ${seasonPos};"></div>`;
+    } else {
+        title.innerHTML = '';
+    }
+    title.innerHTML += `
         <div class="menu-title-text">
             ${titleCaseName}<br>
             <span style="font-size: 12pt;">${bridge.bars_number}</span>
