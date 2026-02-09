@@ -7,6 +7,7 @@ let projectsData = {};
 let hubData = {};
 let projectRingLayers = {};
 let projectRingsVisible = false;
+let hubPanelActive = false;
 let currentMode = 'default';
 let currentZoom = 8;
 const wvBounds = [[37.206, -82.605], [40.621, -77.742]];
@@ -15,7 +16,8 @@ let hoveredBridge = null;
 let radialMenu = null;
 let nameTooltip = null;
 let currentSearchQuery = ''; // Track search state
-let boxExcludedBars = new Set(); // Bridges excluded by box select
+let boxExcludedBars = new Set(); // Bridges excluded by box select or Ctrl+Click
+let excludeUndoStack = []; // Stack of actions: each entry is an array of BARS strings
 
 // Inspection system
 let inspectionsData = {}; // BARS number -> array of inspections
@@ -164,6 +166,7 @@ async function init() {
         initBoxSelect();
         initEasterEggs();
         checkMothmanDay();
+        checkFlatwoodsDay();
 
         document.getElementById('loading').style.display = 'none';
         console.log('✓ SpanBase ready');
@@ -250,6 +253,15 @@ function addBridges() {
 
             L.DomEvent.stopPropagation(e);
             removeNameTooltip();
+
+            // Ctrl+Click: exclude this single bridge point
+            if (e.originalEvent && e.originalEvent.ctrlKey) {
+                boxExcludedBars.add(bridge.bars_number);
+                excludeUndoStack.push([bridge.bars_number]);
+                updateBridgeSizes();
+                showBoxFilterIndicator();
+                return;
+            }
 
             // HUB Data isolation mode or theme mode: go directly to project info
             if (countCategoryState.hubdata || hubDataMode === 2) {
@@ -430,30 +442,59 @@ function removeNameTooltip() {
     }
 }
 
+// Seasonal NRG Bridge images for radial menu title
+const nrgSeasonImages = ['Bridge-Spring-3.jpg', 'Bridge-Spring-3.jpg', 'bridge%20fall.jpg', 'bridge%20winter.jpg'];
+const nrgSeasonLabels = ['Spring', 'Summer', 'Fall', 'Winter'];
+const nrgSeasonPositions = ['center', 'center', 'center', 'center calc(50% + 10px)'];
+const nrgSeasonBorders = ['#3a9e4f', '#FFB81C', '#e87830', '#ffffff'];
+const nrgSeasonBorderWidths = ['2px', '1px', '1px', '1px'];
+function getNrgSeasonIndex() {
+    const month = new Date().getMonth(); // 0-11
+    if (month >= 2 && month <= 4) return 0;        // Mar-May: Spring
+    if (month >= 5 && month <= 7) return 1;        // Jun-Aug: Summer
+    if (month >= 8 && month <= 10) return 2;       // Sep-Nov: Fall
+    return 3;                                       // Dec-Feb: Winter
+}
+
+function getNrgSeasonImage() {
+    return nrgSeasonImages[getNrgSeasonIndex()];
+}
+
+function getNrgSeasonLabel() {
+    return nrgSeasonLabels[getNrgSeasonIndex()];
+}
+
 function showRadialMenu(latlng, bridge) {
     closeAllMenus();
-    
+
     const point = map.latLngToContainerPoint(latlng);
-    
+
     // Create title above menu - 10px from center circle (117/2 = 58.5, + 10 = ~70px)
     const title = L.DomUtil.create('div', 'menu-title');
     title.style.left = point.x + 'px';
     title.style.top = (point.y - 277) + 'px'; // Moved up 7px more
-    
+
     // Convert bridge name to title case
     const bridgeName = cleanBridgeName(bridge.bridge_name);
     const titleCaseName = bridgeName.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 
+    const seasonIdx = getNrgSeasonIndex();
+    const seasonImg = nrgSeasonImages[seasonIdx];
+    const seasonPos = nrgSeasonPositions[seasonIdx];
+    const seasonBorder = nrgSeasonBorders[seasonIdx];
+    title.style.borderColor = seasonBorder;
+    title.style.borderWidth = nrgSeasonBorderWidths[seasonIdx];
     title.innerHTML = `
+        <div class="menu-title-bg" style="background-image: url('${seasonImg}'); background-position: ${seasonPos};"></div>
         <div class="menu-title-text">
             ${titleCaseName}<br>
             <span style="font-size: 12pt;">${bridge.bars_number}</span>
         </div>
         <div class="menu-title-links">
-            <a href="https://www.google.com/maps?q=${bridge.latitude},${bridge.longitude}" 
-               target="_blank" class="menu-title-link">Google Maps</a>
-            <a href="${bridge.bars_hyperlink || '#'}" 
-               target="_blank" class="menu-title-link">AssetWise</a>
+            <a href="https://www.google.com/maps?q=${bridge.latitude},${bridge.longitude}"
+               target="_blank" class="menu-title-link" data-tip="Open this bridge location in Google Maps">Google Maps</a>
+            <a href="${bridge.bars_hyperlink || '#'}"
+               target="_blank" class="menu-title-link" data-tip="Open this bridge record in AssetWise">AssetWise</a>
         </div>
     `;
     document.getElementById('map').appendChild(title);
@@ -476,20 +517,21 @@ function showRadialMenu(latlng, bridge) {
     // Build nodes — ordered bottom-to-top for z-index stacking
     // Stacking (front to back): DOH logo > Inspection > Narrative > Condition > HUB Data > Geometry > Attributes
     // HUB Data button only shown if bridge has project data (green ring)
-    const hasHubData = hubDataMode === 1 && projectsData[bridge.bars_number];
+    const hubPanelOpen = document.getElementById('hubPanel') && document.getElementById('hubPanel').classList.contains('ontop');
+    const hasHubData = (hubDataMode === 1 && projectsData[bridge.bars_number]) || (hubPanelOpen && hubData[bridge.bars_number]);
     const nodes = hasHubData ? [
-        { angle: 150, label: 'Attributes',  action: () => showAttributes(bridge),       z: 1 },  // Bottom-left
-        { angle: 90,  label: 'Geometry',     action: () => showGeometry(bridge),         z: 2 },  // Bottom
-        { angle: 30,  label: 'HUB Data',     action: () => showProjectInfo(bridge),      z: 3 },  // Bottom-right
-        { angle: 330, label: 'Condition',    action: () => showCondition(bridge),        z: 4 },  // Top-right
-        { angle: 210, label: 'Narrative',    action: () => showNarratives(bridge),       z: 5 },  // Top-left
-        { angle: 270, label: 'Inspection',   action: () => showInspectionsPopup(bridge), z: 6 },  // Top (12 o'clock)
+        { angle: 150, label: 'Attributes',  action: () => showAttributes(bridge),       z: 1, tip: 'Location, route, subroute, functional class, ADT, NHS designation, on/under bridge type, utilities, and design number' },
+        { angle: 90,  label: 'Geometry',     action: () => showGeometry(bridge),         z: 2, tip: 'Bridge dimensions — length, width, area, skew, clearances, year built, age, bridge type, and span lengths' },
+        { angle: 30,  label: 'HUB Data',     action: () => showHubDataInfo(bridge),      z: 3, tip: 'Project data from the HUB system — project number, SPN, phase, status, family code, financials (amount, expenditure, balance), and timeline' },
+        { angle: 330, label: 'Condition',    action: () => showCondition(bridge),        z: 4, tip: 'Component condition ratings for Deck, Superstructure, Substructure, Bearings, and Joints on a 1–9 scale, plus the calculated sufficiency rating' },
+        { angle: 210, label: 'Narrative',    action: () => showNarratives(bridge),       z: 5, tip: 'Inspector notes by component — Deck, Superstructure, Substructure, Joints, Railings, Paint, plus Summary & Recommendations and Engineer\'s Comments' },
+        { angle: 270, label: 'Inspection',   action: () => showInspectionsPopup(bridge), z: 6, tip: 'Inspection history and schedule — type, begin/completion/due dates, and current status (On Time, Due Soon, Overdue, or Past Due)' },
     ] : [
-        { angle: 126, label: 'Attributes',  action: () => showAttributes(bridge),       z: 1 },  // Bottom-left
-        { angle: 54,  label: 'Geometry',     action: () => showGeometry(bridge),         z: 2 },  // Bottom-right
-        { angle: 342, label: 'Condition',    action: () => showCondition(bridge),        z: 4 },  // Top-right
-        { angle: 198, label: 'Narrative',    action: () => showNarratives(bridge),       z: 5 },  // Top-left
-        { angle: 270, label: 'Inspection',   action: () => showInspectionsPopup(bridge), z: 6 },  // Top (12 o'clock)
+        { angle: 126, label: 'Attributes',  action: () => showAttributes(bridge),       z: 1, tip: 'Location, route, subroute, functional class, ADT, NHS designation, on/under bridge type, utilities, and design number' },
+        { angle: 54,  label: 'Geometry',     action: () => showGeometry(bridge),         z: 2, tip: 'Bridge dimensions — length, width, area, skew, clearances, year built, age, bridge type, and span lengths' },
+        { angle: 342, label: 'Condition',    action: () => showCondition(bridge),        z: 4, tip: 'Component condition ratings for Deck, Superstructure, Substructure, Bearings, and Joints on a 1–9 scale, plus the calculated sufficiency rating' },
+        { angle: 198, label: 'Narrative',    action: () => showNarratives(bridge),       z: 5, tip: 'Inspector notes by component — Deck, Superstructure, Substructure, Joints, Railings, Paint, plus Summary & Recommendations and Engineer\'s Comments' },
+        { angle: 270, label: 'Inspection',   action: () => showInspectionsPopup(bridge), z: 6, tip: 'Inspection history and schedule — type, begin/completion/due dates, and current status (On Time, Due Soon, Overdue, or Past Due)' },
     ];
 
     nodes.forEach(node => {
@@ -501,6 +543,7 @@ function showRadialMenu(latlng, bridge) {
         option.style.top = (distance * Math.sin(rad)) + 'px';
         option.style.zIndex = node.z;
         option.innerHTML = `<span class="label">${node.label}</span>`;
+        if (node.tip) option.setAttribute('data-tip', node.tip);
 
         option.onclick = function(e) {
             e.stopPropagation();
@@ -766,6 +809,127 @@ function showProjectInfo(bridge) {
     });
 
     createInfoPanel('Project Information', html, bridge);
+}
+
+function showHubDataInfo(bridge) {
+    const bars = bridge.bars_number;
+    const projects = hubData[bars];
+
+    if (!projects || projects.length === 0) {
+        createInfoPanel('HUB Data', `
+            <div style="padding: 10px; color: #999; text-align: center;">
+                No HUB data for this bridge.
+            </div>
+        `, bridge);
+        return;
+    }
+
+    function fmtMoney(val) {
+        if (val === 0 || val === null || val === undefined) return '$0.00';
+        return '$' + Math.abs(val).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + (val < 0 ? ' (CR)' : '');
+    }
+
+    let html = '';
+    projects.forEach((proj, i) => {
+        if (projects.length > 1) {
+            html += `<div style="margin-bottom:8px; padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.15); font-weight:700; color:#22c55e;">Project ${i + 1} of ${projects.length}</div>`;
+        }
+        // Family codes can be long with || separators — split them
+        let familyHtml = 'N/A';
+        if (proj.family_code) {
+            const codes = proj.family_code.split('||').map(c => c.trim()).filter(c => c);
+            familyHtml = codes.map(c => {
+                const parts = c.split('-');
+                return parts[0] || c;
+            }).join(', ');
+        }
+
+        html += `
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">Project</span>
+                    <span class="info-value">${proj.project || 'N/A'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">SPN</span>
+                    <span class="info-value">${proj.spn || 'N/A'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Federal Project</span>
+                    <span class="info-value">${proj.federal_project || 'N/A'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Name</span>
+                    <span class="info-value">${proj.name || 'N/A'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Phase</span>
+                    <span class="info-value">${proj.phase || 'N/A'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Allocation</span>
+                    <span class="info-value">${proj.allocation || 'N/A'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">District</span>
+                    <span class="info-value">${proj.district || 'N/A'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Division</span>
+                    <span class="info-value">${proj.division || 'N/A'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Project Status</span>
+                    <span class="info-value">${proj.project_status || 'N/A'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Phase Status</span>
+                    <span class="info-value">${proj.phase_status || 'N/A'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Family Code</span>
+                    <span class="info-value">${familyHtml}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Est/Authorized</span>
+                    <span class="info-value">${proj.est_auth || 'N/A'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">P/NP</span>
+                    <span class="info-value">${proj.p_np || 'N/A'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Amount</span>
+                    <span class="info-value">${fmtMoney(proj.amount)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Expenditure</span>
+                    <span class="info-value">${fmtMoney(proj.expenditure)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Balance</span>
+                    <span class="info-value">${fmtMoney(proj.balance)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Start Date</span>
+                    <span class="info-value">${proj.start_date || 'N/A'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Days to Expiration</span>
+                    <span class="info-value">${proj.days_expiration || 'N/A'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">End Date</span>
+                    <span class="info-value">${proj.end_date || 'N/A'}</span>
+                </div>
+            </div>
+        `;
+        if (i < projects.length - 1) {
+            html += '<div style="margin:12px 0; border-top:2px solid rgba(34,197,94,0.3);"></div>';
+        }
+    });
+
+    createInfoPanel('HUB Data', html, bridge);
 }
 
 function showCondition(bridge) {
@@ -1214,6 +1378,56 @@ function updateBridgeSizes() {
     // If inspection filters are active, use inspection update logic
     if (inspectionFiltersActive) {
         updateBridgesForInspection();
+        return;
+    }
+
+    // HF panel active — show only hubData bridges in green
+    if (hubPanelActive) {
+        const baseSize = getPointSize();
+        Object.entries(bridgeLayers).forEach(([bars, marker]) => {
+            const bridge = marker.bridgeData;
+            if (!bridge) return;
+
+            if (!activeDistricts[bridge.district]) {
+                if (marker._map) marker.remove();
+                return;
+            }
+
+            if (currentSearchQuery.length > 0) {
+                const barsUpper = (bridge.bars_number || '').toUpperCase();
+                const name = (bridge.bridge_name || '').toUpperCase();
+                const isNumericSearch = /^\d/.test(currentSearchQuery);
+                const matchesBars = isNumericSearch ? barsUpper.startsWith(currentSearchQuery) : barsUpper.includes(currentSearchQuery);
+                const matchesName = isNumericSearch ? name.startsWith(currentSearchQuery) : name.includes(currentSearchQuery);
+                if (!matchesBars && !matchesName) {
+                    if (marker._map) marker.remove();
+                    return;
+                }
+            }
+
+            if (typeof attributesFilterState !== 'undefined' && attributesFilterState.active) {
+                if (!bridgePassesAttributesFilter(bridge)) {
+                    if (marker._map) marker.remove();
+                    return;
+                }
+            }
+
+            if (hubData[bars]) {
+                if (hubFilterState.active && !bridgePassesHubFilter(bars)) {
+                    if (marker._map) marker.remove();
+                    return;
+                }
+                marker.setRadius(baseSize);
+                marker.setStyle({
+                    fillColor: '#22c55e',
+                    fillOpacity: 1,
+                    opacity: 1
+                });
+                if (!marker._map) marker.addTo(map);
+            } else {
+                if (marker._map) marker.remove();
+            }
+        });
         return;
     }
 
@@ -1695,7 +1909,8 @@ function showEasterEggList() {
         '<b style="color:var(--wvdoh-yellow);">3.</b> Type <b>↑↑↓↓←→←→BA</b> on keyboard &mdash; Contra 30 Lives<br>' +
         '<b style="color:var(--wvdoh-yellow);">4.</b> Type <b>wv</b> or <b>country roads</b> in Route Search &mdash; Take Me Home<br>' +
         '<b style="color:var(--wvdoh-yellow);">5.</b> Click <b>SpanBase</b> title <b>7 times</b> &mdash; Enter the Matrix<br>' +
-        '<b style="color:var(--wvdoh-yellow);">6.</b> <b>December 15th</b> (or Ctrl+Shift+M) &mdash; Mothman / Silver Bridge Memorial' +
+        '<b style="color:var(--wvdoh-yellow);">6.</b> <b>December 15th</b> (or Ctrl+Shift+M) &mdash; Mothman / Silver Bridge Memorial<br>' +
+        '<b style="color:var(--wvdoh-yellow);">7.</b> <b>September 12th</b> (or Ctrl+Shift+F) &mdash; Flatwoods Monster' +
         '</div>';
     document.body.appendChild(popup);
 }
@@ -2076,6 +2291,11 @@ window.resetInspectionTab = function() {
 window.resetCurrentTab = function() {
     closeAllMenus();
 
+    // Clear box select / Ctrl+Click exclusions
+    if (boxExcludedBars.size > 0) {
+        clearBoxSelect();
+    }
+
     // Turn off HUB Data toggle if active
     if (hubDataMode > 0) {
         hubDataMode = 0;
@@ -2139,6 +2359,20 @@ document.addEventListener('keydown', function(e) {
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         resetCurrentTab();
+    }
+});
+
+// Ctrl+Z to undo last Ctrl+Click exclusion
+document.addEventListener('keydown', function(e) {
+    if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
+        // Don't interfere if user is typing in an input field
+        const tag = document.activeElement && document.activeElement.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (excludeUndoStack.length > 0) {
+            undoExclude();
+        }
     }
 });
 
@@ -2536,11 +2770,15 @@ window.toggleAttributesPanel = function() {
     if (panelsOpen && attrIsOnTop) {
         attrPanel.classList.remove('open', 'ontop');
         condPanel.classList.remove('open', 'behind');
+        if (hubPanel) hubPanel.classList.remove('open', 'ontop');
+        hubPanelActive = false;
     } else {
         attrPanel.classList.add('open', 'ontop');
-        condPanel.classList.add('open', 'behind');
+        condPanel.classList.add('open');
+        condPanel.classList.remove('behind');
+        if (hubPanel) { hubPanel.classList.add('open'); hubPanel.classList.remove('ontop'); }
+        if (hubPanelActive) { hubPanelActive = false; updateBridgeSizes(); }
     }
-    if (hubPanel) hubPanel.classList.remove('open', 'ontop');
 };
 
 // Condition filter toggle
@@ -2549,19 +2787,22 @@ window.toggleEvaluationPanel = function() {
     const condPanel = document.getElementById('evaluationPanel');
     const hubPanel = document.getElementById('hubPanel');
 
-    const attrIsOnTop = attrPanel.classList.contains('ontop');
+    const condIsOnTop = condPanel.classList.contains('open') && !condPanel.classList.contains('behind') && !attrPanel.classList.contains('ontop') && !(hubPanel && hubPanel.classList.contains('ontop'));
     const panelsOpen = condPanel.classList.contains('open');
 
-    if (panelsOpen && !attrIsOnTop) {
+    if (panelsOpen && condIsOnTop) {
         condPanel.classList.remove('open', 'behind');
         attrPanel.classList.remove('open', 'ontop');
+        if (hubPanel) hubPanel.classList.remove('open', 'ontop');
+        hubPanelActive = false;
     } else {
         condPanel.classList.add('open');
-        attrPanel.classList.add('open');
         condPanel.classList.remove('behind');
+        attrPanel.classList.add('open');
         attrPanel.classList.remove('ontop');
+        if (hubPanel) { hubPanel.classList.add('open'); hubPanel.classList.remove('ontop'); }
+        if (hubPanelActive) { hubPanelActive = false; updateBridgeSizes(); }
     }
-    if (hubPanel) hubPanel.classList.remove('open', 'ontop');
 };
 
 // ===== ATTRIBUTES FILTER SYSTEM (v7.0.7) =====
@@ -2579,6 +2820,7 @@ const attributesFilterState = {
     onBridge: [],
     underBridge: [],
     bridgeType: [],
+    bridgeTypeMode: 'multi',  // 'multi' = additive isolate, 'solo' = radio button (one at a time)
     route: '',
     subroute: '',
     showNA: false  // Don't show N/A bridges by default
@@ -2663,9 +2905,12 @@ window.resetAttributesFilter = function() {
     document.querySelectorAll('.on-bridge-cb').forEach(cb => cb.checked = false);
     document.querySelectorAll('.under-bridge-cb').forEach(cb => cb.checked = false);
 
-    // Reset bridge type checkboxes
+    // Reset bridge type checkboxes and mode
     attributesFilterState.bridgeType = [];
+    attributesFilterState.bridgeTypeMode = 'multi';
     document.querySelectorAll('.bridge-type-cb').forEach(cb => cb.checked = false);
+    const btModeBtn = document.getElementById('bridge-type-mode-toggle');
+    if (btModeBtn) btModeBtn.textContent = 'SOLO';
 
     document.getElementById('route-search').value = '';
     document.getElementById('subroute-search').value = '';
@@ -3182,7 +3427,13 @@ function renderBridgeTypeCheckboxes() {
     // Attach change listeners
     container.querySelectorAll('.bridge-type-cb').forEach(cb => {
         cb.addEventListener('change', function() {
-            if (this.checked) {
+            if (attributesFilterState.bridgeTypeMode === 'solo' && this.checked) {
+                // Radio behavior: uncheck all others
+                container.querySelectorAll('.bridge-type-cb').forEach(other => {
+                    if (other !== this) other.checked = false;
+                });
+                attributesFilterState.bridgeType = [this.value];
+            } else if (this.checked) {
                 attributesFilterState.bridgeType.push(this.value);
             } else {
                 attributesFilterState.bridgeType = attributesFilterState.bridgeType.filter(v => v !== this.value);
@@ -3196,6 +3447,29 @@ window.toggleBridgeTypeSort = function() {
     bridgeTypeSortMode = bridgeTypeSortMode === 'alpha' ? 'count' : 'alpha';
     document.getElementById('bridge-type-sort-toggle').textContent = bridgeTypeSortMode === 'alpha' ? '#' : 'A-Z';
     renderBridgeTypeCheckboxes();
+};
+
+window.toggleBridgeTypeMode = function() {
+    const btn = document.getElementById('bridge-type-mode-toggle');
+    const container = document.getElementById('bridge-type-checkboxes');
+    if (attributesFilterState.bridgeTypeMode === 'multi') {
+        attributesFilterState.bridgeTypeMode = 'solo';
+        btn.textContent = 'MULTI';  // clicking will switch to multi
+        // If multiple checked, keep only the first
+        if (attributesFilterState.bridgeType.length > 1) {
+            const keep = attributesFilterState.bridgeType[0];
+            attributesFilterState.bridgeType = [keep];
+            if (container) {
+                container.querySelectorAll('.bridge-type-cb').forEach(cb => {
+                    cb.checked = cb.value === keep;
+                });
+            }
+            applyAttributesFilter();
+        }
+    } else {
+        attributesFilterState.bridgeTypeMode = 'multi';
+        btn.textContent = 'SOLO';  // clicking will switch to solo
+    }
 };
 
 function sliderToValue(position, min, max, field) {
@@ -4631,9 +4905,10 @@ function syncHubButton() {
 
 // Apply category filter
 function applyCountCategoryFilter() {
-    // HUB Data isolation — works independently of condition sliders
+    // HUB Data isolation — intersect with all active filters
     if (countCategoryState.hubdata) {
         const baseSize = getPointSize();
+        const conditionActive = hasConditionSlidersActive();
         Object.entries(bridgeLayers).forEach(([bars, marker]) => {
             const bridge = marker.bridgeData;
             if (!bridge) return;
@@ -4665,6 +4940,21 @@ function applyCountCategoryFilter() {
                 }
             }
 
+            // Respect box select / Ctrl+Click exclusions
+            if (boxExcludedBars.has(bars)) {
+                if (marker._map) marker.remove();
+                return;
+            }
+
+            // Respect condition/evaluation filters
+            if (conditionActive) {
+                const color = getBridgeColor(bridge);
+                if (color.toLowerCase() === '#6b7280') {
+                    if (marker._map) marker.remove();
+                    return;
+                }
+            }
+
             // Only show bridges with project data, in solid green
             if (projectsData[bars]) {
                 marker.setRadius(baseSize);
@@ -4681,9 +4971,13 @@ function applyCountCategoryFilter() {
         return;
     }
 
-    // HUB Data theme mode — show only HUB bridges as green dots
+    // HUB Data theme mode — show only HUB bridges as green dots, intersected with all active filters
     if (hubDataMode === 2) {
         const baseSize = getPointSize();
+        const conditionActive = hasConditionSlidersActive();
+        const hasIsolation = countCategoryState.na ||
+            (!countCategoryState.critical || !countCategoryState.emergent || !countCategoryState.satisfactory || !countCategoryState.completed);
+
         Object.entries(bridgeLayers).forEach(([bars, marker]) => {
             const bridge = marker.bridgeData;
             if (!bridge) return;
@@ -4707,6 +5001,33 @@ function applyCountCategoryFilter() {
 
             if (typeof attributesFilterState !== 'undefined' && attributesFilterState.active) {
                 if (!bridgePassesAttributesFilter(bridge)) {
+                    if (marker._map) marker.remove();
+                    return;
+                }
+            }
+
+            // Respect box select / Ctrl+Click exclusions
+            if (boxExcludedBars.has(bars)) {
+                if (marker._map) marker.remove();
+                return;
+            }
+
+            // Respect condition/evaluation filters — bridge must pass category check
+            if (conditionActive || hasIsolation) {
+                const category = getBridgeCategory(bridge);
+                let passesCategory = false;
+                if (category === 'critical' && countCategoryState.critical) passesCategory = true;
+                if (category === 'emergent' && countCategoryState.emergent) passesCategory = true;
+                if (category === 'completed' && countCategoryState.completed) passesCategory = true;
+                if (category === 'satisfactory' && countCategoryState.satisfactory) passesCategory = true;
+                if (category === 'na' && countCategoryState.na) passesCategory = true;
+                if (!passesCategory) {
+                    if (marker._map) marker.remove();
+                    return;
+                }
+                // Also hide grey (N/A) bridges unless NA is toggled on
+                const color = getBridgeColor(bridge);
+                if (color.toLowerCase() === '#6b7280' && !countCategoryState.na) {
                     if (marker._map) marker.remove();
                     return;
                 }
@@ -5074,7 +5395,7 @@ const tourSteps = [
     {
         target: '#route-search-box',
         title: 'Box Select',
-        text: 'We\'ve searched Route 79 for you. Notice some results aren\'t on I-79 — they\'re inside the red circle. 🤫\n\nYou can either exclude these points OR hide all the others. Hold Ctrl and drag a box around them, then click Exclude or Include. You can also pan and zoom the map.\n\nA Reset button appears at the bottom when a box filter is active.',
+        text: 'We\'ve searched Route 79 for you. Notice some results aren\'t on I-79 — they\'re inside the red circle. 🤫\n\nYou can either exclude these points OR hide all the others. Hold Ctrl and drag a box around them, then click Exclude or Include. You can also Ctrl+Click individual bridge points to exclude them one at a time.\n\nUse Ctrl+Z to undo your last exclusion. A Reset button appears at the bottom when a filter is active.',
         position: 'right',
         tooltipFixed: { right: 20 },
         onEnter: function() {
@@ -5102,6 +5423,7 @@ const tourSteps = [
 
             // Clear any box selection from prior use
             boxExcludedBars.clear();
+            excludeUndoStack.length = 0;
             const ind = document.getElementById('box-filter-indicator');
             if (ind) ind.remove();
 
@@ -5205,6 +5527,7 @@ const tourSteps = [
 
             // Clear box selection
             boxExcludedBars.clear();
+            excludeUndoStack.length = 0;
             const bfInd = document.getElementById('box-filter-indicator');
             if (bfInd) bfInd.remove();
 
@@ -5539,6 +5862,7 @@ function restoreTourState() {
 
     // Clear box select in case we quit during step 10
     boxExcludedBars.clear();
+    excludeUndoStack.length = 0;
     const boxInd = document.getElementById('box-filter-indicator');
     if (boxInd) boxInd.remove();
 
@@ -5949,11 +6273,14 @@ function showBoxSelectPopup(selectedBars, rect) {
             if (opts.fillOpacity === 0 || opts.opacity === 0) return;
             allVisible.push(bars);
         });
+        const newlyExcluded = [];
         allVisible.forEach(bars => {
             if (!selectedBars.includes(bars)) {
                 boxExcludedBars.add(bars);
+                newlyExcluded.push(bars);
             }
         });
+        if (newlyExcluded.length > 0) excludeUndoStack.push(newlyExcluded);
         // Hide tour red circle if present
         if (window._tourRedCircles) {
             window._tourRedCircles.forEach(function(c) { if (c._map) c.remove(); });
@@ -5964,7 +6291,12 @@ function showBoxSelectPopup(selectedBars, rect) {
     });
 
     document.getElementById('box-select-exclude').addEventListener('click', function() {
-        selectedBars.forEach(bars => boxExcludedBars.add(bars));
+        const newlyExcluded = [];
+        selectedBars.forEach(bars => {
+            if (!boxExcludedBars.has(bars)) newlyExcluded.push(bars);
+            boxExcludedBars.add(bars);
+        });
+        if (newlyExcluded.length > 0) excludeUndoStack.push(newlyExcluded);
         // Hide tour red circle if present
         if (window._tourRedCircles) {
             window._tourRedCircles.forEach(function(c) { if (c._map) c.remove(); });
@@ -6000,14 +6332,27 @@ function showBoxFilterIndicator() {
         indicator.id = 'box-filter-indicator';
         document.body.appendChild(indicator);
     }
+    const undoBtn = excludeUndoStack.length > 0
+        ? `<button onclick="undoExclude()" data-tip="Undo the last exclusion (Ctrl+Z)">Undo</button>`
+        : '';
     indicator.innerHTML = `
         <span>${boxExcludedBars.size} bridge${boxExcludedBars.size !== 1 ? 's' : ''} filtered</span>
-        <button onclick="clearBoxSelect()">Reset</button>
+        ${undoBtn}
+        <button onclick="clearBoxSelect()" data-tip="Reset all excluded bridges. You can also press Esc.">Reset</button>
     `;
 }
 
+window.undoExclude = function() {
+    if (excludeUndoStack.length === 0) return;
+    const lastAction = excludeUndoStack.pop();
+    lastAction.forEach(bars => boxExcludedBars.delete(bars));
+    updateBridgeSizes();
+    showBoxFilterIndicator();
+};
+
 function clearBoxSelect() {
     boxExcludedBars.clear();
+    excludeUndoStack.length = 0;
     const indicator = document.getElementById('box-filter-indicator');
     if (indicator) indicator.remove();
     updateBridgeSizes();
@@ -6038,6 +6383,14 @@ function initEasterEggs() {
         if (e.ctrlKey && e.shiftKey && e.key === 'M') {
             e.preventDefault();
             checkMothmanDay(true);
+        }
+    });
+
+    // Flatwoods Monster: Ctrl+Shift+F
+    document.addEventListener('keydown', function(e) {
+        if (e.ctrlKey && e.shiftKey && e.key === 'F') {
+            e.preventDefault();
+            checkFlatwoodsDay(true);
         }
     });
 
@@ -6278,7 +6631,7 @@ function checkMothmanDay(force) {
 
     // Mothman eyes — two large red glowing circles
     const eyesContainer = document.createElement('div');
-    eyesContainer.style.cssText = 'display:flex;gap:60px;margin-bottom:200px;opacity:0;transition:opacity 2s ease 3s;';
+    eyesContainer.style.cssText = 'display:flex;gap:60px;margin-bottom:200px;opacity:0;transition:opacity 2s ease 6s;';
 
     const leftEye = document.createElement('div');
     leftEye.style.cssText = 'width:96px;height:96px;border-radius:50%;background:radial-gradient(circle,#ff0000 30%,#cc0000 60%,#660000 100%);box-shadow:0 0 40px #ff0000,0 0 80px #ff0000,0 0 120px rgba(255,0,0,0.5);animation:mothmanPulse 3s ease-in-out infinite;';
@@ -6301,6 +6654,9 @@ function checkMothmanDay(force) {
         '<div style="color:#cc0000;font-size:10pt;line-height:1.8;margin-bottom:30px;font-style:italic;">' +
         'In the thirteen months before the collapse, residents reported sightings of a large, winged creature with glowing red eyes near the bridge. They called it the Mothman.' +
         '</div>' +
+        '<div style="color:#ff3333;font-size:10pt;line-height:1.8;margin-bottom:30px;">' +
+        'This tragedy prompted the Federal-Aid Highway Act of 1968 and the establishment of the National Bridge Inspection Standards (NBIS) in 1971 — the birth of the federal bridge inspection program that continues to safeguard the nation\u2019s bridges today.' +
+        '</div>' +
         '<div style="color:rgba(255,255,255,0.2);font-size:9pt;margin-top:20px;">Click anywhere to continue</div>';
     overlay.appendChild(textBlock);
 
@@ -6321,11 +6677,11 @@ function checkMothmanDay(force) {
         });
     });
 
-    // Eyes fade out very slowly after appearing
+    // Eyes fade out very slowly after appearing (6s delay + 2s fade-in + 3s visible = 11s)
     setTimeout(function() {
         eyesContainer.style.transition = 'opacity 12s ease';
         eyesContainer.style.opacity = '0';
-    }, 8000);
+    }, 11000);
 
     // Click to dismiss
     overlay.addEventListener('click', function() {
@@ -6337,18 +6693,149 @@ function checkMothmanDay(force) {
     });
 }
 
+// ═══════════════════════════════════════════════════════
+// FLATWOODS MONSTER — September 12, 1952
+// ═══════════════════════════════════════════════════════
+
+function checkFlatwoodsDay(force) {
+    if (!force) {
+        const now = new Date();
+        if (now.getMonth() !== 8 || now.getDate() !== 12) return; // Sep = month 8
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = 'flatwoods-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:999999;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 1.5s ease;overflow:hidden;';
+
+    // Green mist layers — edges of screen
+    const mist = document.createElement('div');
+    mist.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;transition:opacity 3s ease 0.5s;pointer-events:none;' +
+        'background:radial-gradient(ellipse at 50% 100%, rgba(0,80,20,0.4) 0%, transparent 60%),' +
+        'radial-gradient(ellipse at 0% 50%, rgba(0,60,10,0.3) 0%, transparent 50%),' +
+        'radial-gradient(ellipse at 100% 50%, rgba(0,60,10,0.3) 0%, transparent 50%),' +
+        'radial-gradient(ellipse at 50% 0%, rgba(0,40,10,0.2) 0%, transparent 40%);';
+    overlay.appendChild(mist);
+
+    // Descending orb — the "meteor"
+    const orb = document.createElement('div');
+    orb.style.cssText = 'position:absolute;top:-60px;left:50%;transform:translateX(-50%);width:24px;height:24px;border-radius:50%;' +
+        'background:radial-gradient(circle,#88ff88 20%,#44cc44 50%,#008800 80%,transparent 100%);' +
+        'box-shadow:0 0 30px #44ff44,0 0 60px #22cc22,0 0 100px rgba(0,255,0,0.3);' +
+        'opacity:0;transition:opacity 1s ease 1.5s;';
+    overlay.appendChild(orb);
+
+    // Creature silhouette — spade-shaped head with body
+    const creature = document.createElement('div');
+    creature.style.cssText = 'position:absolute;bottom:-400px;left:50%;transform:translateX(-50%);opacity:0;transition:opacity 2s ease 6s,bottom 4s ease 6s;display:flex;flex-direction:column;align-items:center;';
+
+    // Spade/ace-of-spades head shape using CSS
+    const head = document.createElement('div');
+    head.style.cssText = 'width:120px;height:140px;position:relative;';
+    head.innerHTML = `
+        <div style="position:absolute;top:0;left:50%;transform:translateX(-50%);width:0;height:0;border-left:60px solid transparent;border-right:60px solid transparent;border-bottom:80px solid #1a3a1a;"></div>
+        <div style="position:absolute;top:65px;left:50%;transform:translateX(-50%);width:100px;height:75px;background:#1a3a1a;border-radius:0 0 50% 50%;"></div>
+        <div style="position:absolute;top:80px;left:50%;transform:translateX(-50%);display:flex;gap:30px;">
+            <div style="width:16px;height:16px;border-radius:50%;background:radial-gradient(circle,#00ff00 30%,#00aa00 70%,#005500 100%);box-shadow:0 0 15px #00ff00,0 0 30px #00ff00;animation:flatwoodsGlow 2.5s ease-in-out infinite;"></div>
+            <div style="width:16px;height:16px;border-radius:50%;background:radial-gradient(circle,#00ff00 30%,#00aa00 70%,#005500 100%);box-shadow:0 0 15px #00ff00,0 0 30px #00ff00;animation:flatwoodsGlow 2.5s ease-in-out infinite;"></div>
+        </div>
+    `;
+    creature.appendChild(head);
+
+    // Body — dark draped shape
+    const body = document.createElement('div');
+    body.style.cssText = 'width:80px;height:180px;background:linear-gradient(to bottom, #1a3a1a 0%, #0d1f0d 100%);border-radius:10px 10px 40px 40px;margin-top:-10px;' +
+        'box-shadow:0 0 40px rgba(0,80,0,0.3);';
+    creature.appendChild(body);
+
+    // Claws/arms
+    const arms = document.createElement('div');
+    arms.style.cssText = 'position:absolute;top:150px;left:50%;transform:translateX(-50%);width:160px;display:flex;justify-content:space-between;';
+    arms.innerHTML = `
+        <div style="width:30px;height:60px;background:#1a3a1a;border-radius:50% 0 0 50%;transform:rotate(15deg);"></div>
+        <div style="width:30px;height:60px;background:#1a3a1a;border-radius:0 50% 50% 0;transform:rotate(-15deg);"></div>
+    `;
+    creature.appendChild(arms);
+    overlay.appendChild(creature);
+
+    // History text
+    const textBlock = document.createElement('div');
+    textBlock.style.cssText = 'position:relative;z-index:2;max-width:520px;text-align:center;opacity:0;transition:opacity 2s ease 1s;padding:20px;border:1px solid rgba(0,180,0,0.3);border-radius:6px;margin-bottom:60px;';
+    textBlock.innerHTML =
+        '<div style="color:#00cc44;font-size:12pt;font-weight:600;letter-spacing:3px;margin-bottom:20px;text-transform:uppercase;">September 12, 1952</div>' +
+        '<div style="color:#44ee66;font-size:11pt;line-height:1.8;margin-bottom:20px;">' +
+        'In the hills of Flatwoods, Braxton County, West Virginia, a group of boys saw a bright object streak across the sky and land on a nearby hilltop. They gathered a small party and went to investigate.' +
+        '</div>' +
+        '<div style="color:#00cc44;font-size:10pt;line-height:1.8;margin-bottom:20px;font-style:italic;">' +
+        'At the top of the hill, a pungent metallic mist filled the air. A hissing sound came from the darkness. Then they saw it \u2014 a towering figure, over ten feet tall, with a glowing green face, a spade-shaped hood, and small claw-like hands. It glided toward them.' +
+        '</div>' +
+        '<div style="color:#44ee66;font-size:10pt;line-height:1.8;margin-bottom:20px;">' +
+        'The witnesses fled in terror. Several fell ill afterward, reporting symptoms consistent with chemical exposure. The Flatwoods Monster remains one of West Virginia\u2019s most enduring mysteries.' +
+        '</div>' +
+        '<div style="color:rgba(255,255,255,0.2);font-size:9pt;margin-top:20px;">Click anywhere to continue</div>';
+    overlay.appendChild(textBlock);
+
+    // Glow animation
+    const glowStyle = document.createElement('style');
+    glowStyle.id = 'flatwoods-glow-style';
+    glowStyle.textContent = `
+        @keyframes flatwoodsGlow { 0%,100% { box-shadow: 0 0 15px #00ff00, 0 0 30px #00ff00; } 50% { box-shadow: 0 0 25px #00ff00, 0 0 50px #00ff00, 0 0 80px rgba(0,255,0,0.5); } }
+        @keyframes orbDescend { 0% { top: -60px; } 100% { top: 35%; } }
+        @keyframes orbFade { 0% { opacity: 1; } 100% { opacity: 0; transform: translateX(-50%) scale(3); } }
+    `;
+    document.head.appendChild(glowStyle);
+
+    document.body.appendChild(overlay);
+
+    // Fade in sequence
+    requestAnimationFrame(function() {
+        requestAnimationFrame(function() {
+            overlay.style.opacity = '1';
+            mist.style.opacity = '1';
+            orb.style.opacity = '1';
+            textBlock.style.opacity = '1';
+            creature.style.opacity = '1';
+            creature.style.bottom = '50px';
+        });
+    });
+
+    // Animate the orb descending after it fades in
+    setTimeout(function() {
+        orb.style.transition = 'top 3s ease-in, opacity 1s ease 2.5s';
+        orb.style.top = '35%';
+        // Orb bursts and fades after landing
+        setTimeout(function() {
+            orb.style.transition = 'opacity 1.5s ease, transform 1.5s ease';
+            orb.style.opacity = '0';
+            orb.style.transform = 'translateX(-50%) scale(4)';
+            orb.style.boxShadow = '0 0 60px #88ff88, 0 0 120px #44ff44, 0 0 200px rgba(0,255,0,0.5)';
+        }, 3200);
+    }, 2500);
+
+    // Creature slowly fades out after appearing
+    setTimeout(function() {
+        creature.style.transition = 'opacity 10s ease';
+        creature.style.opacity = '0';
+    }, 16000);
+
+    // Click to dismiss
+    overlay.addEventListener('click', function() {
+        overlay.style.opacity = '0';
+        setTimeout(function() {
+            overlay.remove();
+            glowStyle.remove();
+        }, 1500);
+    });
+}
+
 // ===== HUB FILTER SYSTEM =====
 
 const hubFilterState = {
     active: false,
     statuses: [],
     phases: [],
-    allocations: [],
     familyCodes: []
 };
 
-let hubAllocCounts = {};
-let hubAllocSortMode = 'count';
 let hubFamilyCounts = {};
 let hubFamilySortMode = 'count';
 
@@ -6356,7 +6843,6 @@ function buildHubFilterUI() {
     // Collect unique values and counts across all hub projects
     const statusCounts = {};
     const phaseCounts = {};
-    hubAllocCounts = {};
     hubFamilyCounts = {};
 
     Object.values(hubData).forEach(projects => {
@@ -6366,9 +6852,6 @@ function buildHubFilterUI() {
 
             const phase = p.phase ? p.phase.substring(0, 2) : '';
             if (phase) phaseCounts[phase] = (phaseCounts[phase] || 0) + 1;
-
-            const alloc = p.allocation || '';
-            if (alloc) hubAllocCounts[alloc] = (hubAllocCounts[alloc] || 0) + 1;
 
             const family = p.family_code || '';
             if (family) hubFamilyCounts[family] = (hubFamilyCounts[family] || 0) + 1;
@@ -6412,8 +6895,7 @@ function buildHubFilterUI() {
         });
     }
 
-    // Build allocation and family code checkboxes
-    renderHubAllocCheckboxes();
+    // Build family code checkboxes
     renderHubFamilyCheckboxes();
 
     // Update match count
@@ -6422,32 +6904,6 @@ function buildHubFilterUI() {
     if (el) el.textContent = totalBridges.toLocaleString() + ' bridges with HUB data';
 
     console.log('✓ Built HUB filter UI');
-}
-
-function renderHubAllocCheckboxes() {
-    const container = document.getElementById('hub-alloc-checkboxes');
-    if (!container) return;
-
-    const codes = Object.keys(hubAllocCounts);
-    if (hubAllocSortMode === 'alpha') codes.sort();
-    else codes.sort((a, b) => hubAllocCounts[b] - hubAllocCounts[a] || a.localeCompare(b));
-
-    const checked = new Set(hubFilterState.allocations);
-    // Shorten allocation labels: "E21-061-FA Bridge, Cat 1, OM" -> "E21-061 (Cat 1)"
-    container.innerHTML = codes.map(code => {
-        const shortLabel = code.split('-').slice(0, 2).join('-');
-        return '<label class="checkbox-label" style="display: block; padding: 2px 0; font-size: 9pt; white-space: nowrap;">' +
-            '<input type="checkbox" class="hub-alloc-cb" value="' + code + '"' + (checked.has(code) ? ' checked' : '') + ' style="margin-right: 6px;">' +
-            shortLabel + ' <span style="color: rgba(255,255,255,0.5);">(' + hubAllocCounts[code] + ')</span></label>';
-    }).join('');
-
-    container.querySelectorAll('.hub-alloc-cb').forEach(cb => {
-        cb.addEventListener('change', function() {
-            if (this.checked) hubFilterState.allocations.push(this.value);
-            else hubFilterState.allocations = hubFilterState.allocations.filter(v => v !== this.value);
-            applyHubFilter();
-        });
-    });
 }
 
 function renderHubFamilyCheckboxes() {
@@ -6475,11 +6931,6 @@ function renderHubFamilyCheckboxes() {
     });
 }
 
-window.toggleHubAllocSort = function() {
-    hubAllocSortMode = hubAllocSortMode === 'alpha' ? 'count' : 'alpha';
-    document.getElementById('hub-alloc-sort-toggle').textContent = hubAllocSortMode === 'alpha' ? '#' : 'A-Z';
-    renderHubAllocCheckboxes();
-};
 
 window.toggleHubFamilySort = function() {
     hubFamilySortMode = hubFamilySortMode === 'alpha' ? 'count' : 'alpha';
@@ -6491,7 +6942,6 @@ function applyHubFilter() {
     const isActive =
         hubFilterState.statuses.length > 0 ||
         hubFilterState.phases.length > 0 ||
-        hubFilterState.allocations.length > 0 ||
         hubFilterState.familyCodes.length > 0;
 
     hubFilterState.active = isActive;
@@ -6532,9 +6982,7 @@ function bridgePassesHubFilter(bars) {
             const phase = p.phase ? p.phase.substring(0, 2) : '';
             if (!hubFilterState.phases.includes(phase)) return false;
         }
-        if (hubFilterState.allocations.length > 0) {
-            if (!hubFilterState.allocations.includes(p.allocation)) return false;
-        }
+
         if (hubFilterState.familyCodes.length > 0) {
             if (!hubFilterState.familyCodes.includes(p.family_code)) return false;
         }
@@ -6545,11 +6993,10 @@ function bridgePassesHubFilter(bars) {
 window.resetHubFilter = function() {
     hubFilterState.statuses = [];
     hubFilterState.phases = [];
-    hubFilterState.allocations = [];
     hubFilterState.familyCodes = [];
     hubFilterState.active = false;
 
-    document.querySelectorAll('.hub-status-cb, .hub-phase-cb, .hub-alloc-cb, .hub-family-cb').forEach(cb => cb.checked = false);
+    document.querySelectorAll('.hub-status-cb, .hub-phase-cb, .hub-family-cb').forEach(cb => cb.checked = false);
 
     const el = document.getElementById('hub-match-count');
     if (el) el.textContent = Object.keys(hubData).length.toLocaleString() + ' bridges with HUB data';
@@ -6571,12 +7018,138 @@ window.toggleHubPanel = function() {
         hubPanel.classList.remove('open', 'ontop');
         attrPanel.classList.remove('open', 'ontop');
         condPanel.classList.remove('open', 'behind');
+        hubPanelActive = false;
+        updateBridgeSizes();
     } else {
-        // Open HUB on top
+        // Open HUB on top, others behind
         hubPanel.classList.add('open', 'ontop');
         attrPanel.classList.add('open');
         attrPanel.classList.remove('ontop');
-        condPanel.classList.add('open', 'behind');
+        condPanel.classList.add('open');
+        condPanel.classList.remove('behind');
+        // Activate HF theme — show only hubData bridges in green
+        hubPanelActive = true;
+        updateBridgeSizes();
     }
 };
+
+// ==================== UI TOOLTIP SYSTEM ====================
+let uiTooltipsEnabled = true; // On by default
+let activeUITooltip = null;
+let tooltipHoverTimer = null;
+
+// Set the button active on page load
+document.addEventListener('DOMContentLoaded', function() {
+    const btn = document.getElementById('tooltip-toggle-btn');
+    if (btn) btn.classList.add('active');
+});
+
+window.toggleUITooltips = function() {
+    uiTooltipsEnabled = !uiTooltipsEnabled;
+    const btn = document.getElementById('tooltip-toggle-btn');
+    if (btn) {
+        btn.classList.toggle('active', uiTooltipsEnabled);
+    }
+    if (!uiTooltipsEnabled) {
+        removeUITooltip();
+    }
+};
+
+function removeUITooltip() {
+    if (activeUITooltip) {
+        activeUITooltip.remove();
+        activeUITooltip = null;
+    }
+    if (tooltipHoverTimer) {
+        clearTimeout(tooltipHoverTimer);
+        tooltipHoverTimer = null;
+    }
+}
+
+function showUITooltip(el) {
+    if (!uiTooltipsEnabled) return;
+    const text = el.getAttribute('data-tip');
+    if (!text) return;
+
+    removeUITooltip();
+
+    const tip = document.createElement('div');
+    tip.className = 'ui-tooltip';
+    tip.textContent = text;
+    document.body.appendChild(tip);
+    activeUITooltip = tip;
+
+    // Position the tooltip relative to the element
+    const rect = el.getBoundingClientRect();
+    const tipRect = tip.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    let left, top;
+
+    // Default: above the element
+    top = rect.top - tipRect.height - 10;
+    left = rect.left + rect.width / 2 - tipRect.width / 2;
+
+    // If it would go above the viewport, place below
+    if (top < 5) {
+        top = rect.bottom + 10;
+        tip.classList.add('arrow-top');
+    }
+
+    // If it would go off the left edge
+    if (left < 5) left = 5;
+    // If it would go off the right edge
+    if (left + tipRect.width > vw - 5) left = vw - tipRect.width - 5;
+
+    // For elements on the left edge (folder tabs), position to the right
+    if (rect.left < 80) {
+        left = rect.right + 10;
+        top = rect.top + rect.height / 2 - tipRect.height / 2;
+        tip.classList.remove('arrow-top');
+        tip.classList.add('arrow-left');
+    }
+
+    // For elements on the right edge (legend, header), position to the left
+    if (rect.right > vw - 80) {
+        left = rect.left - tipRect.width - 10;
+        top = rect.top + rect.height / 2 - tipRect.height / 2;
+        tip.classList.remove('arrow-top');
+        tip.classList.add('arrow-right');
+    }
+
+    tip.style.left = left + 'px';
+    tip.style.top = top + 'px';
+
+    // Fade in
+    requestAnimationFrame(() => tip.classList.add('visible'));
+}
+
+// Attach tooltip listeners using event delegation on document
+document.addEventListener('mouseover', function(e) {
+    if (!uiTooltipsEnabled) return;
+    const target = e.target.closest('[data-tip]');
+    if (!target) return;
+
+    if (tooltipHoverTimer) clearTimeout(tooltipHoverTimer);
+    tooltipHoverTimer = setTimeout(() => showUITooltip(target), 400);
+});
+
+document.addEventListener('mouseout', function(e) {
+    if (!uiTooltipsEnabled) return;
+    const target = e.target.closest('[data-tip]');
+    if (!target) return;
+
+    // Check if we're moving to a child of the same data-tip element
+    const related = e.relatedTarget;
+    if (related && target.contains(related)) return;
+
+    removeUITooltip();
+});
+
+// Also remove tooltip on scroll or click
+document.addEventListener('scroll', removeUITooltip, true);
+document.addEventListener('click', function() {
+    if (activeUITooltip) removeUITooltip();
+});
 
