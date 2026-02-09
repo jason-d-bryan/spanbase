@@ -562,7 +562,9 @@
             justify-content: center;
             margin-top: 6px;
         }
-        .menu-title-link {
+        .menu-title-link,
+        .leaflet-container .menu-title-link,
+        .menu-title-link:visited {
             color: #4db8ff; /* Bright blue - easily visible */
             text-decoration: underline; /* Always underlined */
             font-size: 10pt;
@@ -571,7 +573,8 @@
             border-radius: 3px;
             transition: all 0.2s;
         }
-        .menu-title-link:hover {
+        .menu-title-link:hover,
+        .leaflet-container .menu-title-link:hover {
             background: rgba(0, 217, 255, 0.2);
             color: #99ebff; /* Slightly darker/more saturated on hover */
         }
