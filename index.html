@@ -671,11 +671,11 @@
             background: var(--wvdoh-blue); 
         }
         .attributes-panel .panel-body::-webkit-scrollbar-thumb {
-            background: #8a7a2a;
+            background: var(--wvdoh-yellow);
             border-radius: 4px;
         }
         .attributes-panel .panel-body::-webkit-scrollbar-thumb:hover {
-            background: #a08e30;
+            background: #ffd700;
         }
 
         /* HUB Panel Scrollbar */
@@ -1272,8 +1272,11 @@
             </div><!-- /eval-sliders-wrapper -->
             </div>
 
+            <div style="margin-top: 12px; text-align: center;">
+                <button onclick="openCfShare(this)" style="background: rgba(255,184,28,0.15); border: 1px solid var(--wvdoh-yellow); color: var(--wvdoh-yellow); padding: 4px 14px; border-radius: 4px; cursor: pointer; font-size: 9pt; font-weight: 600;" data-tip="Share the current map view and filter settings via link, email, or QR code">Share</button>
+            </div>
             <!-- Reset Button -->
-            <div style="margin-top: 15px; text-align: center;">
+            <div style="margin-top: 8px; text-align: center;">
                 <button onclick="resetCurrentTab()" style="padding: 8px 20px; font-size: 10pt; background: var(--wvdoh-yellow); border: none; border-radius: 4px; cursor: pointer; font-weight: 600; color: var(--wvdoh-blue);" data-tip="Reset all condition sliders to default. You can also press Esc.">Reset</button>
             </div>
             </div>
@@ -1293,8 +1296,10 @@
         <div class="panel-header">
             <h3>Attributes Filter</h3>
         </div>
-        <div class="panel-body">
-            <!-- NO INSTRUCTION TEXT -->
+        <div class="panel-body" style="padding-top: 6px;">
+            <div style="text-align: center; margin-bottom: 6px;">
+                <button onclick="openAfShare(this)" style="background: rgba(255,184,28,0.15); border: 1px solid var(--wvdoh-yellow); color: var(--wvdoh-yellow); padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 9pt; font-weight: 600;" data-tip="Share the current map view and filter settings via link, email, or QR code">Share</button>
+            </div>
             <!-- ROUTE/SUBROUTE SEARCH -->
             <div id="route-search-box" style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;" data-tip="Filter bridges by route number (e.g., 79, I-79, US-19) and optional subroute">
                 <h4 class="section-title">Route Search</h4>
@@ -1321,6 +1326,9 @@
                     <span style="font-size: 9pt; color: rgba(255,255,255,0.6);">0</span>
                     <span class="slider-value" id="value-adt" style="font-size: 9pt;">150,000</span>
                     <span id="max-label-adt" style="font-size: 9pt; color: rgba(255,255,255,0.6);">150,000</span>
+                </div>
+                <div style="text-align: center; margin-top: 6px;">
+                    <button onclick="isolate600kBridge()" style="background: none; border: none; color: rgba(255,184,28,0.5); font-size: 8pt; font-style: italic; cursor: pointer; padding: 2px 6px;" data-tip="Morris Builders Bridge (31A065) — 600,500 ADT. It's in a league of its own.">that one bridge with 600k</button>
                 </div>
             </div>
             <!-- NHS FILTER -->
@@ -1539,6 +1547,7 @@
     
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

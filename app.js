@@ -472,6 +472,7 @@ function getNrgSeasonLabel() {
 
 function showRadialMenu(latlng, bridge) {
     closeAllMenus();
+    window._radialBridge = bridge;
 
     const point = map.latLngToContainerPoint(latlng);
 
@@ -506,6 +507,7 @@ function showRadialMenu(latlng, bridge) {
                target="_blank" class="menu-title-link" data-tip="Open this bridge location in Google Maps">Google Maps</a>
             <a href="${bridge.bars_hyperlink || '#'}"
                target="_blank" class="menu-title-link" data-tip="Open this bridge record in AssetWise">AssetWise</a>
+            <a href="javascript:void(0)" class="menu-title-link" onclick="openRadialShare(this, window._radialBridge)" data-tip="Share this bridge's data via link, email, or QR code">Share</a>
         </div>
     `;
     document.getElementById('map').appendChild(title);
@@ -1104,6 +1106,9 @@ function closeAllMenus() {
     }
     // Close all info panels (popups)
     document.querySelectorAll('.info-panel').forEach(panel => panel.remove());
+    // Close share popover
+    const sharePop = document.getElementById('share-popover');
+    if (sharePop) sharePop.remove();
 }
 
 function getBridgeColor(bridge) {
@@ -2873,6 +2878,14 @@ window.toggleAdtMode = function() {
     applyAttributesFilter();
 };
 
+window.isolate600kBridge = function() {
+    const searchInput = document.getElementById('searchInput');
+    if (searchInput) {
+        searchInput.value = '31A065';
+        searchInput.dispatchEvent(new Event('input'));
+    }
+};
+
 // NHS filter
 window.setNhsFilter = function(value) {
     attributesFilterState.nhs = value;
@@ -3345,7 +3358,9 @@ function buildQuantileTables() {
 
     // Compute max from data
     Object.entries(fields).forEach(([key, cfg]) => {
-        const values = bridgesData.map(cfg.getter).filter(v => v > 0).sort((a, b) => a - b);
+        let values = bridgesData.map(cfg.getter).filter(v => v > 0).sort((a, b) => a - b);
+        // Exclude the 600k ADT outlier from max/quantile computation (it gets its own button)
+        if (key === 'adt') values = values.filter(v => v < 500000);
         const rawMax = Math.max(...values);
         sliderMaxValues[key] = cfg.round(rawMax);
 
@@ -4092,16 +4107,6 @@ function _buildCategoryTablePopup(rows, category) {
     const existing = document.getElementById('category-table-popup');
     if (existing) existing.remove();
 
-    // Build plain-text table for email body
-    const emailLines = rows.map((r, i) => {
-        const n = (r.name || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-        let d = r.days > 0 ? `${r.days} days past due` : r.days === 0 ? 'Due today' : `in ${Math.abs(r.days)} days`;
-        return `${i + 1}. D${r.district.replace('District ', '')} | ${r.bars} | ${n} | ${r.type} | Due: ${r.dueDateStr} | ${d}`;
-    });
-    const emailSubject = encodeURIComponent(`SpanBase ${label} — ${rows.length} Bridge${rows.length !== 1 ? 's' : ''}`);
-    const emailBody = encodeURIComponent(`${label} — ${rows.length} Bridge${rows.length !== 1 ? 's' : ''}\n\n` + emailLines.join('\n'));
-    const mailtoHref = `mailto:?subject=${emailSubject}&body=${emailBody}`;
-
     const thStyle = 'padding: 8px; cursor: pointer; user-select: none;';
 
     const popup = document.createElement('div');
@@ -4133,8 +4138,8 @@ function _buildCategoryTablePopup(rows, category) {
             <h3>${label} — ${rows.length} Bridge${rows.length !== 1 ? 's' : ''}</h3>
             <div style="display: flex; align-items: center; gap: 8px;">
                 ${inspNavButtons}
-                <a href="${mailtoHref}" title="Share via email"
-                   style="background: rgba(255,184,28,0.2); border: 1px solid var(--wvdoh-yellow); color: var(--wvdoh-yellow); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 9pt; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 4px;">&#9993; Email</a>
+                <button onclick="openCrReportShare(this)" title="Share report"
+                   style="background: rgba(255,184,28,0.2); border: 1px solid var(--wvdoh-yellow); color: var(--wvdoh-yellow); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 9pt; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">&#8599; Share</button>
                 <button onclick="exportCategoryCSV(window._categoryTableRows, '${label.replace(/\s+/g, '')}')"
                         style="background: rgba(255,184,28,0.2); border: 1px solid var(--wvdoh-yellow); color: var(--wvdoh-yellow); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 9pt; font-weight: 600;">Export CSV</button>
                 <button class="close-btn" onclick="document.getElementById('category-table-popup').remove()">&#215;</button>
@@ -4431,16 +4436,6 @@ function _buildMaintenanceCategoryTablePopup(rows, category) {
     const existing = document.getElementById('category-table-popup');
     if (existing) existing.remove();
 
-    // Build plain-text for email body
-    const emailLines = rows.map((r, i) => {
-        const n = (r.name || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-        const nhsText = r.nhs === 1 || r.nhs === '1' || (typeof r.nhs === 'string' && r.nhs.toLowerCase() === 'yes') ? 'Yes' : 'No';
-        return `${i + 1}. D${r.district.replace('District ', '')} | ${r.bars} | ${n} | Deck:${ratingDisplay(r.deck)} Super:${ratingDisplay(r.superstructure)} Sub:${ratingDisplay(r.substructure)} | Suff:${r.sufficiencyDisplay} | NHS:${nhsText}`;
-    });
-    const emailSubject = encodeURIComponent(`SpanBase ${label}`);
-    const emailBody = encodeURIComponent(`${label}\n\n` + emailLines.join('\n'));
-    const mailtoHref = `mailto:?subject=${emailSubject}&body=${emailBody}`;
-
     const csvLabel = label.replace(/[^a-zA-Z0-9]+/g, '_').replace(/_+$/, '');
     const thStyle = 'padding: 8px; cursor: pointer; user-select: none;';
 
@@ -4478,8 +4473,8 @@ function _buildMaintenanceCategoryTablePopup(rows, category) {
             <h3>${label}</h3>
             <div style="display: flex; align-items: center; gap: 8px;">
                 ${navButtons}
-                <a href="${mailtoHref}" title="Share via email"
-                   style="background: rgba(255,184,28,0.2); border: 1px solid var(--wvdoh-yellow); color: var(--wvdoh-yellow); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 9pt; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 4px;">&#9993; Email</a>
+                <button onclick="openCrReportShare(this)" title="Share report"
+                   style="background: rgba(255,184,28,0.2); border: 1px solid var(--wvdoh-yellow); color: var(--wvdoh-yellow); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 9pt; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">&#8599; Share</button>
                 <button onclick="exportMaintenanceCategoryCSV(window._maintTableRows, '${csvLabel}')"
                         style="background: rgba(255,184,28,0.2); border: 1px solid var(--wvdoh-yellow); color: var(--wvdoh-yellow); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 9pt; font-weight: 600;">Export CSV</button>
                 <button class="close-btn" onclick="document.getElementById('category-table-popup').remove()">&#215;</button>
@@ -7046,7 +7041,7 @@ window.toggleHubPanel = function() {
 
 // ==================== SHAREABLE LINK SYSTEM ====================
 
-function generateShareableLink() {
+function generateShareableLinkUrl() {
     const state = {};
 
     // Map view
@@ -7132,19 +7127,35 @@ function generateShareableLink() {
     if (!ccs.total) catParts.push('t0');
     if (catParts.length > 0) state.cat = catParts.join(',');
 
+    // Open category report popup
+    const catPopup = document.getElementById('category-table-popup');
+    if (catPopup) {
+        if (window._maintTableCategory) state.rpt = 'm:' + window._maintTableCategory;
+        else if (window._categoryTableCategory) state.rpt = 'i:' + window._categoryTableCategory;
+    }
+
+    // Which filter tab is on top
+    const attrPanel = document.getElementById('attributesPanel');
+    const condPanel = document.getElementById('evaluationPanel');
+    if (attrPanel && attrPanel.classList.contains('ontop')) {
+        state.tab = 'af';
+    } else if (condPanel && condPanel.classList.contains('open') && !condPanel.classList.contains('behind')) {
+        state.tab = 'cf';
+    }
+
     // Encode to hash
     const params = new URLSearchParams(state);
-    const url = window.location.origin + window.location.pathname + '#' + params.toString();
+    return window.location.origin + window.location.pathname + '#' + params.toString();
+}
 
-    // Copy to clipboard
+function generateShareableLink() {
+    const url = generateShareableLinkUrl();
     navigator.clipboard.writeText(url).then(() => {
         console.log('Shareable link copied to clipboard');
         showShareLinkToast('Link copied to clipboard!');
     }).catch(() => {
-        // Fallback
         prompt('Copy this shareable link:', url);
     });
-
     return url;
 }
 
@@ -7162,6 +7173,352 @@ function showShareLinkToast(message) {
         toast.style.opacity = '0';
         setTimeout(() => toast.remove(), 300);
     }, 2500);
+}
+
+// ==================== SHARE POPOVER SYSTEM ====================
+
+function buildBridgeZoomLink(bridge) {
+    const state = { lat: Number(bridge.latitude).toFixed(5), lng: Number(bridge.longitude).toFixed(5), z: 15 };
+    const params = new URLSearchParams(state);
+    return window.location.origin + window.location.pathname + '#' + params.toString();
+}
+
+function buildBridgeDataText(bridge, selectedKeys) {
+    const name = cleanBridgeName(bridge.bridge_name);
+    const lines = [];
+    lines.push(`${name} (${bridge.bars_number})`);
+    lines.push(`District ${bridge.district ? bridge.district.replace('District ', '') : 'N/A'}`);
+    lines.push('');
+
+    if (selectedKeys.includes('attributes')) {
+        lines.push('--- Attributes ---');
+        lines.push(`Location: ${bridge.location || 'N/A'}`);
+        lines.push(`Route: ${bridge.route || 'N/A'}${bridge.subroute ? ' / ' + bridge.subroute : ''}`);
+        lines.push(`Functional Class: ${bridge.functional_class || 'N/A'}`);
+        lines.push(`NHS: ${bridge.nhs === 1 || bridge.nhs === '1' || (typeof bridge.nhs === 'string' && bridge.nhs.toLowerCase() === 'yes') ? 'Yes' : 'No'}`);
+        lines.push(`On Bridge: ${bridge.on_bridge || 'N/A'}`);
+        lines.push(`Under Bridge: ${bridge.under_bridge || 'N/A'}`);
+        lines.push(`Bridge Type: ${bridge.bridge_type || 'N/A'}${bridge.bridge_type_code ? ' (' + bridge.bridge_type_code + ')' : ''}`);
+        lines.push(`ADT: ${bridge.adt != null ? Number(bridge.adt).toLocaleString() : 'N/A'}${bridge.adt_year ? ' (' + bridge.adt_year + ')' : ''}`);
+        lines.push(`Utilities: ${bridge.utilities_on_bridge || 'N/A'}`);
+        lines.push('');
+    }
+
+    if (selectedKeys.includes('geometry')) {
+        lines.push('--- Geometry ---');
+        lines.push(`Length: ${bridge.bridge_length || 'N/A'} ft`);
+        lines.push(`Total Length: ${bridge.total_bridge_length || 'N/A'} ft`);
+        lines.push(`Width (Out-to-Out): ${bridge.width_out_to_out || 'N/A'} ft`);
+        lines.push(`Width (Curb-to-Curb): ${bridge.width_curb_to_curb || 'N/A'} ft`);
+        lines.push(`Area: ${bridge.bridge_area != null ? Number(bridge.bridge_area).toLocaleString() : 'N/A'} sq ft`);
+        lines.push(`Year Built: ${bridge.year_built || 'N/A'}`);
+        lines.push(`Age: ${bridge.bridge_age != null ? bridge.bridge_age + ' years' : 'N/A'}`);
+        lines.push(`Skew: ${bridge.skew || 'N/A'}`);
+        if (bridge.span_lengths) lines.push(`Spans: ${bridge.span_lengths}`);
+        lines.push('');
+    }
+
+    if (selectedKeys.includes('condition')) {
+        lines.push('--- Condition Ratings ---');
+        const r = (v) => (v != null && !isNaN(v) && v >= 1 && v <= 9) ? v : 'N/A';
+        lines.push(`Deck: ${r(bridge.deck_rating)}`);
+        lines.push(`Superstructure: ${r(bridge.superstructure_rating)}`);
+        lines.push(`Substructure: ${r(bridge.substructure_rating)}`);
+        lines.push(`Bearings: ${r(bridge.bearings_rating)}`);
+        lines.push(`Joints: ${r(bridge.joints_rating)}`);
+        const bars = bridge.bars_number;
+        if (sufficiencyData[bars] != null) {
+            lines.push(`Sufficiency: ${sufficiencyData[bars].toFixed(1)}`);
+        }
+        lines.push('');
+    }
+
+    if (selectedKeys.includes('narrative')) {
+        lines.push('--- Narratives ---');
+        const narFields = [
+            ['Paint', 'narrative_paint'], ['Deck', 'narrative_deck'],
+            ['Superstructure', 'narrative_superstructure'], ['Substructure', 'narrative_substructure'],
+            ['Joints', 'narrative_joints'], ['Railings', 'narrative_railings'],
+            ['Summary', 'narrative_summary'], ['Comments', 'narrative_comments']
+        ];
+        narFields.forEach(([label, field]) => {
+            if (bridge[field]) lines.push(`${label}: ${bridge[field]}`);
+        });
+        lines.push('');
+    }
+
+    if (selectedKeys.includes('inspection')) {
+        const insps = inspectionsData[bridge.bars_number];
+        if (insps && insps.length > 0) {
+            lines.push('--- Inspections ---');
+            insps.forEach(insp => {
+                lines.push(`${insp.type}: Due ${insp.due || 'N/A'} (Interval: ${insp.interval || 'N/A'} mo)`);
+            });
+            lines.push('');
+        }
+    }
+
+    if (selectedKeys.includes('hubdata')) {
+        const projects = hubData[bridge.bars_number];
+        if (projects && projects.length > 0) {
+            lines.push('--- HUB Projects ---');
+            projects.forEach(p => {
+                lines.push(`${p.project || ''} - ${p.name || ''} | Phase: ${p.phase || 'N/A'} | Status: ${p.phase_status || 'N/A'}`);
+            });
+            lines.push('');
+        }
+    }
+
+    return {
+        subject: `SpanBase — ${name} (${bridge.bars_number})`,
+        body: lines.join('\n')
+    };
+}
+
+function buildCrReportText() {
+    // Determine which report type is active
+    const isMaint = !!window._maintTableRows;
+    const rows = isMaint ? window._maintTableRows : window._categoryTableRows;
+    const label = isMaint
+        ? (window._maintTableLabel || window._maintTableCategory || 'Report')
+        : (categoryLabels[window._categoryTableCategory] || window._categoryTableCategory || 'Report');
+
+    if (!rows || rows.length === 0) return { subject: 'SpanBase Report', body: 'No data available.' };
+
+    const lines = [];
+    lines.push(`${label} — ${rows.length} Bridge${rows.length !== 1 ? 's' : ''}`);
+    lines.push('');
+
+    if (isMaint) {
+        const r = (v) => (v != null && !isNaN(v) && v >= 1 && v <= 9) ? v : 'N/A';
+        rows.forEach((row, i) => {
+            const n = (row.name || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+            lines.push(`${i + 1}. D${row.district.replace('District ', '')} | ${row.bars} | ${n} | Deck:${r(row.deck)} Super:${r(row.superstructure)} Sub:${r(row.substructure)} | Suff:${row.sufficiencyDisplay} | NHS:${row.nhs === 1 || row.nhs === '1' ? 'Yes' : 'No'}`);
+        });
+    } else {
+        rows.forEach((row, i) => {
+            const n = (row.name || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+            let d = row.days > 0 ? `${row.days} days past due` : row.days === 0 ? 'Due today' : `in ${Math.abs(row.days)} days`;
+            lines.push(`${i + 1}. D${row.district.replace('District ', '')} | ${row.bars} | ${n} | ${row.type} | Due: ${row.dueDateStr} | ${d}`);
+        });
+    }
+
+    return {
+        subject: `SpanBase ${label}`,
+        body: lines.join('\n')
+    };
+}
+
+function showSharePopover(anchorEl, config) {
+    // Remove existing popover
+    const existing = document.getElementById('share-popover');
+    if (existing) existing.remove();
+
+    const popover = document.createElement('div');
+    popover.id = 'share-popover';
+    popover.style.cssText = 'position:fixed;z-index:100000;background:#003B5C;border:2px solid #FFB81C;border-radius:8px;padding:14px 16px;box-shadow:0 8px 24px rgba(0,0,0,0.5);min-width:220px;max-width:320px;font-family:Aptos,Roboto,sans-serif;';
+
+    let whatHtml = '';
+    const popoverId = 'share-popover';
+
+    if (config.whatMode === 'radio') {
+        whatHtml = `<div style="margin-bottom:10px;">
+            <div style="color:#FFB81C;font-size:9pt;font-weight:600;margin-bottom:6px;">What to Share</div>
+            ${config.options.map((opt, i) => `
+                <label style="display:flex;align-items:center;gap:6px;color:#fff;font-size:10pt;margin-bottom:4px;cursor:pointer;">
+                    <input type="radio" name="share-what" value="${opt.value}" ${i === 0 ? 'checked' : ''} style="accent-color:#FFB81C;">
+                    ${opt.label}
+                </label>`).join('')}
+        </div>`;
+    } else if (config.whatMode === 'checkbox') {
+        whatHtml = `<div style="margin-bottom:10px;">
+            <div style="color:#FFB81C;font-size:9pt;font-weight:600;margin-bottom:6px;">What to Share</div>
+            ${config.options.map(opt => `
+                <label style="display:flex;align-items:center;gap:6px;color:#fff;font-size:10pt;margin-bottom:4px;cursor:pointer;">
+                    <input type="checkbox" class="share-what-cb" value="${opt.value}" ${opt.checked ? 'checked' : ''} style="accent-color:#FFB81C;">
+                    ${opt.label}
+                </label>`).join('')}
+        </div>`;
+    }
+
+    const howHtml = `
+        <div style="color:#FFB81C;font-size:9pt;font-weight:600;margin-bottom:6px;">How to Share</div>
+        <div style="display:flex;gap:6px;">
+            <button id="share-btn-link" style="flex:1;padding:6px 0;background:rgba(255,184,28,0.15);border:1px solid #FFB81C;color:#FFB81C;border-radius:4px;cursor:pointer;font-size:10pt;font-weight:600;">&#128279; Link</button>
+            <button id="share-btn-email" style="flex:1;padding:6px 0;background:rgba(255,184,28,0.15);border:1px solid #FFB81C;color:#FFB81C;border-radius:4px;cursor:pointer;font-size:10pt;font-weight:600;">&#9993; Email</button>
+            <button id="share-btn-qr" style="flex:1;padding:6px 0;background:rgba(255,184,28,0.15);border:1px solid #FFB81C;color:#FFB81C;border-radius:4px;cursor:pointer;font-size:10pt;font-weight:600;">&#9638; QR</button>
+        </div>
+        <div id="share-qr-container" style="display:none;margin-top:10px;justify-content:center;"></div>
+        <div id="share-status" style="display:none;margin-top:8px;text-align:center;color:#FFB81C;font-size:9pt;font-weight:600;"></div>
+    `;
+
+    popover.innerHTML = whatHtml + howHtml;
+    document.body.appendChild(popover);
+
+    // Position near anchor
+    const rect = anchorEl.getBoundingClientRect();
+    const popH = popover.offsetHeight;
+    const popW = popover.offsetWidth;
+    let top = rect.bottom + 6;
+    let left = rect.left;
+    // If too close to bottom, show above
+    if (top + popH > window.innerHeight - 10) top = rect.top - popH - 6;
+    // Keep within viewport horizontally
+    if (left + popW > window.innerWidth - 10) left = window.innerWidth - popW - 10;
+    if (left < 10) left = 10;
+    popover.style.top = top + 'px';
+    popover.style.left = left + 'px';
+
+    // Helper to read current "what" selection
+    function getShareData() {
+        if (config.whatMode === 'radio') {
+            const checked = popover.querySelector('input[name="share-what"]:checked');
+            return checked ? checked.value : config.options[0].value;
+        }
+        if (config.whatMode === 'checkbox') {
+            return Array.from(popover.querySelectorAll('.share-what-cb:checked')).map(cb => cb.value);
+        }
+        return 'view'; // whatMode: 'none'
+    }
+
+    function showStatus(msg) {
+        const el = document.getElementById('share-status');
+        if (el) { el.textContent = msg; el.style.display = 'block'; }
+        setTimeout(() => { if (el) el.style.display = 'none'; }, 2500);
+    }
+
+    // Build content based on selection
+    function getContent() {
+        return config.getContent(getShareData());
+    }
+
+    // Link button
+    popover.querySelector('#share-btn-link').addEventListener('click', function() {
+        const content = getContent();
+        const text = content.url || content.body || '';
+        navigator.clipboard.writeText(text).then(() => {
+            showStatus('Copied to clipboard!');
+        }).catch(() => {
+            prompt('Copy this:', text);
+        });
+    });
+
+    // Email button
+    popover.querySelector('#share-btn-email').addEventListener('click', function() {
+        const content = getContent();
+        const subject = encodeURIComponent(content.subject || 'SpanBase');
+        const body = encodeURIComponent(content.url ? content.body + '\n\n' + content.url : content.body || '');
+        window.open(`mailto:?subject=${subject}&body=${body}`, '_self');
+    });
+
+    // QR button
+    popover.querySelector('#share-btn-qr').addEventListener('click', function() {
+        const container = document.getElementById('share-qr-container');
+        if (!container) return;
+        if (container.style.display !== 'none') {
+            container.style.display = 'none';
+            container.innerHTML = '';
+            return;
+        }
+        container.style.display = 'flex';
+        container.innerHTML = '';
+        const content = getContent();
+        const qrUrl = content.url || content.body || '';
+        if (qrUrl.length > 2000) {
+            container.innerHTML = '<div style="color:#FCA5A5;font-size:9pt;">Content too long for QR code. Use Link or Email instead.</div>';
+            return;
+        }
+        try {
+            new QRCode(container, {
+                text: qrUrl,
+                width: 160,
+                height: 160,
+                colorDark: '#003B5C',
+                colorLight: '#FFFFFF',
+                correctLevel: QRCode.CorrectLevel.M
+            });
+        } catch (e) {
+            container.innerHTML = '<div style="color:#FCA5A5;font-size:9pt;">Could not generate QR code.</div>';
+        }
+    });
+
+    // Close on outside click (delayed to avoid immediate close)
+    setTimeout(() => {
+        function onOutsideClick(e) {
+            if (!popover.contains(e.target) && e.target !== anchorEl && !anchorEl.contains(e.target)) {
+                popover.remove();
+                document.removeEventListener('mousedown', onOutsideClick);
+            }
+        }
+        document.addEventListener('mousedown', onOutsideClick);
+    }, 100);
+}
+
+// ==================== SHARE LOCATION WRAPPERS ====================
+
+function openCfShare(btn) {
+    showSharePopover(btn, {
+        whatMode: 'none',
+        getContent: function() {
+            const url = generateShareableLinkUrl();
+            return { subject: 'SpanBase — Current View', body: 'Check out this SpanBase view:', url: url };
+        }
+    });
+}
+
+function openAfShare(btn) {
+    showSharePopover(btn, {
+        whatMode: 'none',
+        getContent: function() {
+            const url = generateShareableLinkUrl();
+            return { subject: 'SpanBase — Current View', body: 'Check out this SpanBase view:', url: url };
+        }
+    });
+}
+
+function openCrReportShare(btn) {
+    showSharePopover(btn, {
+        whatMode: 'radio',
+        options: [
+            { value: 'view', label: 'Current View (link)' },
+            { value: 'data', label: 'Report Data (text)' }
+        ],
+        getContent: function(selection) {
+            if (selection === 'data') {
+                const report = buildCrReportText();
+                return { subject: report.subject, body: report.body };
+            }
+            const url = generateShareableLinkUrl();
+            return { subject: 'SpanBase — Current View', body: 'Check out this SpanBase view:', url: url };
+        }
+    });
+}
+
+function openRadialShare(btn, bridge) {
+    showSharePopover(btn, {
+        whatMode: 'checkbox',
+        options: [
+            { value: 'attributes', label: 'Attributes', checked: false },
+            { value: 'geometry', label: 'Geometry', checked: false },
+            { value: 'condition', label: 'Condition', checked: false },
+            { value: 'narrative', label: 'Narratives', checked: false },
+            { value: 'inspection', label: 'Inspections', checked: false },
+            { value: 'hubdata', label: 'HUB Data', checked: false },
+            { value: 'view', label: 'Current View', checked: true }
+        ],
+        getContent: function(selectedValues) {
+            const dataKeys = selectedValues.filter(v => v !== 'view');
+            const includesView = selectedValues.includes('view');
+            const url = includesView ? buildBridgeZoomLink(bridge) : null;
+
+            if (dataKeys.length === 0 && includesView) {
+                return { subject: 'SpanBase — ' + cleanBridgeName(bridge.bridge_name), body: 'Check out this bridge on SpanBase:', url: url };
+            }
+
+            const data = dataKeys.length > 0 ? buildBridgeDataText(bridge, dataKeys) : { subject: 'SpanBase — ' + cleanBridgeName(bridge.bridge_name), body: '' };
+            return { subject: data.subject, body: data.body, url: url };
+        }
+    });
 }
 
 function restoreFromUrl() {
@@ -7273,8 +7630,35 @@ function restoreFromUrl() {
             });
         }
 
-        // Clear hash so refresh doesn't re-apply (optional, keeps URL clean)
-        // history.replaceState(null, '', window.location.pathname);
+        // Open category report popup after filters are applied
+        if (p.has('rpt')) {
+            const rpt = p.get('rpt');
+            const [mode, cat] = rpt.split(':');
+            // Delay to let filters settle first
+            setTimeout(() => {
+                if (mode === 'm') showMaintenanceCategoryTable(cat);
+                else if (mode === 'i') showCategoryTable(cat);
+            }, 500);
+        }
+
+        // Open the correct filter tab
+        if (p.has('tab')) {
+            const tab = p.get('tab');
+            const condPanel = document.getElementById('evaluationPanel');
+            const attrPanel = document.getElementById('attributesPanel');
+            const hubPanel = document.getElementById('hubPanel');
+            if (tab === 'af' && attrPanel && condPanel) {
+                attrPanel.classList.add('open', 'ontop');
+                condPanel.classList.add('open');
+                condPanel.classList.remove('behind');
+                if (hubPanel) { hubPanel.classList.add('open'); hubPanel.classList.remove('ontop'); }
+            } else if (tab === 'cf' && condPanel) {
+                condPanel.classList.add('open');
+                condPanel.classList.remove('behind');
+                if (attrPanel) { attrPanel.classList.add('open'); attrPanel.classList.remove('ontop'); }
+                if (hubPanel) { hubPanel.classList.add('open'); hubPanel.classList.remove('ontop'); }
+            }
+        }
 
         console.log('✓ Restored view from shared link');
         return true;
