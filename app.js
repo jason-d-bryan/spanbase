@@ -168,6 +168,12 @@ async function init() {
         checkMothmanDay();
         checkFlatwoodsDay();
 
+        // Restore shared link state if URL has hash params
+        if (window.location.hash.length > 1) {
+            restoreFromUrl();
+            updateBridgeSizes();
+        }
+
         document.getElementById('loading').style.display = 'none';
         console.log('✓ SpanBase ready');
         
@@ -4072,7 +4078,7 @@ function _buildCategoryTablePopup(rows, category) {
 
         tableRows += `<tr style="${rowStyle} border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
             <td style="padding: 6px 8px; text-align: center;">${i + 1}</td>
-            <td style="padding: 6px 8px;">${r.district}</td>
+            <td style="padding: 6px 8px;">${r.district.replace('District ', '')}</td>
             <td style="padding: 6px 8px;"><a href="${r.barsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${r.bars}</a></td>
             <td class="col-name" style="padding: 6px 8px;"><a href="${mapsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${titleCaseName}</a></td>
             <td style="padding: 6px 8px;">${r.type}</td>
@@ -4090,7 +4096,7 @@ function _buildCategoryTablePopup(rows, category) {
     const emailLines = rows.map((r, i) => {
         const n = (r.name || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
         let d = r.days > 0 ? `${r.days} days past due` : r.days === 0 ? 'Due today' : `in ${Math.abs(r.days)} days`;
-        return `${i + 1}. D${r.district} | ${r.bars} | ${n} | ${r.type} | Due: ${r.dueDateStr} | ${d}`;
+        return `${i + 1}. D${r.district.replace('District ', '')} | ${r.bars} | ${n} | ${r.type} | Due: ${r.dueDateStr} | ${d}`;
     });
     const emailSubject = encodeURIComponent(`SpanBase ${label} — ${rows.length} Bridge${rows.length !== 1 ? 's' : ''}`);
     const emailBody = encodeURIComponent(`${label} — ${rows.length} Bridge${rows.length !== 1 ? 's' : ''}\n\n` + emailLines.join('\n'));
@@ -4209,7 +4215,7 @@ function exportCategoryCSV(rows, label) {
         if (r.days > 0) daysText = r.days;
         else if (r.days === 0) daysText = 0;
         else daysText = -Math.abs(r.days);
-        return `${i + 1},${r.district},"${r.bars}","${titleCaseName}",${r.type},${r.interval},${r.dueDateStr},${daysText}`;
+        return `${i + 1},${r.district.replace('District ', '')},"${r.bars}","${titleCaseName}",${r.type},${r.interval},${r.dueDateStr},${daysText}`;
     });
 
     const csv = headers + '\n' + csvRows.join('\n');
@@ -4405,7 +4411,7 @@ function _buildMaintenanceCategoryTablePopup(rows, category) {
 
         tableRows += `<tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
             <td style="padding: 6px 8px; text-align: center;">${i + 1}</td>
-            <td style="padding: 6px 8px;">${r.district}</td>
+            <td style="padding: 6px 8px;">${r.district.replace('District ', '')}</td>
             <td style="padding: 6px 8px;"><a href="${r.barsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${r.bars}</a></td>
             <td class="col-name" style="padding: 6px 8px;"><a href="${mapsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${titleCaseName}</a></td>
             <td style="padding: 6px 8px; text-align: center;">${highlightRating('deck', r.deck)}</td>
@@ -4413,7 +4419,7 @@ function _buildMaintenanceCategoryTablePopup(rows, category) {
             <td style="padding: 6px 8px; text-align: center;">${highlightRating('substructure', r.substructure)}</td>
             <td style="padding: 6px 8px; text-align: center;">${highlightRating('bearings', r.bearings)}</td>
             <td style="padding: 6px 8px; text-align: center;">${highlightRating('joints', r.joints)}</td>
-            <td style="padding: 6px 8px; text-align: center;">${r.sufficiencyDisplay}</td>
+            <td style="padding: 6px 8px; text-align: center;">${sliderValues.sufficiency < 100 ? '<span style="color: ' + catColor + '; font-weight: 700;">' + r.sufficiencyDisplay + '</span>' : r.sufficiencyDisplay}</td>
             <td style="padding: 6px 8px; text-align: center;">${nhsDisplay}</td>
             <td style="padding: 6px 8px; text-align: right;">${adtDisplay}</td>
             <td style="padding: 6px 8px; text-align: center;">${adtYearDisplay}</td>
@@ -4429,7 +4435,7 @@ function _buildMaintenanceCategoryTablePopup(rows, category) {
     const emailLines = rows.map((r, i) => {
         const n = (r.name || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
         const nhsText = r.nhs === 1 || r.nhs === '1' || (typeof r.nhs === 'string' && r.nhs.toLowerCase() === 'yes') ? 'Yes' : 'No';
-        return `${i + 1}. D${r.district} | ${r.bars} | ${n} | Deck:${ratingDisplay(r.deck)} Super:${ratingDisplay(r.superstructure)} Sub:${ratingDisplay(r.substructure)} | Suff:${r.sufficiencyDisplay} | NHS:${nhsText}`;
+        return `${i + 1}. D${r.district.replace('District ', '')} | ${r.bars} | ${n} | Deck:${ratingDisplay(r.deck)} Super:${ratingDisplay(r.superstructure)} Sub:${ratingDisplay(r.substructure)} | Suff:${r.sufficiencyDisplay} | NHS:${nhsText}`;
     });
     const emailSubject = encodeURIComponent(`SpanBase ${label}`);
     const emailBody = encodeURIComponent(`${label}\n\n` + emailLines.join('\n'));
@@ -4509,7 +4515,7 @@ function _buildMaintenanceCategoryTablePopup(rows, category) {
                         <th style="${thStyle} text-align: center;${thHighlight('substructure')}" onclick="sortMaintenanceCategoryTable('substructure')">Sub${arrow('substructure')}</th>
                         <th style="${thStyle} text-align: center;${thHighlight('bearings')}" onclick="sortMaintenanceCategoryTable('bearings')">Bearings${arrow('bearings')}</th>
                         <th style="${thStyle} text-align: center;${thHighlight('joints')}" onclick="sortMaintenanceCategoryTable('joints')">Joints${arrow('joints')}</th>
-                        <th style="${thStyle} text-align: center;" onclick="sortMaintenanceCategoryTable('sufficiency')">Calc. Suff.${arrow('sufficiency')}</th>
+                        <th style="${thStyle} text-align: center;${sliderValues.sufficiency < 100 ? ' color: ' + catColor + '; font-weight: 700;' : ''}" onclick="sortMaintenanceCategoryTable('sufficiency')">Calc. Suff.${arrow('sufficiency')}</th>
                         <th style="${thStyle} text-align: center;" onclick="sortMaintenanceCategoryTable('nhs')">NHS${arrow('nhs')}</th>
                         <th style="${thStyle} text-align: right;" onclick="sortMaintenanceCategoryTable('adt')">ADT${arrow('adt')}</th>
                         <th style="${thStyle} text-align: center;" onclick="sortMaintenanceCategoryTable('adtYear')">ADT Year${arrow('adtYear')}</th>
@@ -4574,7 +4580,7 @@ function exportMaintenanceCategoryCSV(rows, label) {
         const adtVal = r.adt != null ? r.adt : '';
         const adtYearVal = r.adtYear || '';
         const ageVal = r.age != null ? r.age : '';
-        return `${i + 1},${r.district},"${r.bars}","${titleCaseName}",${deckVal},${superVal},${subVal},${bearVal},${jointVal},${suffVal},${nhsText},${adtVal},${adtYearVal},${ageVal}`;
+        return `${i + 1},${r.district.replace('District ', '')},"${r.bars}","${titleCaseName}",${deckVal},${superVal},${subVal},${bearVal},${jointVal},${suffVal},${nhsText},${adtVal},${adtYearVal},${ageVal}`;
     });
 
     const csv = headers + '\n' + csvRows.join('\n');
@@ -7037,6 +7043,249 @@ window.toggleHubPanel = function() {
         updateBridgeSizes();
     }
 };
+
+// ==================== SHAREABLE LINK SYSTEM ====================
+
+function generateShareableLink() {
+    const state = {};
+
+    // Map view
+    const center = map.getCenter();
+    state.lat = center.lat.toFixed(5);
+    state.lng = center.lng.toFixed(5);
+    state.z = map.getZoom();
+
+    // Districts — only encode if some are off (compact: list disabled ones)
+    const offDistricts = Object.entries(activeDistricts)
+        .filter(([, v]) => !v)
+        .map(([k]) => k.replace('District ', ''));
+    if (offDistricts.length > 0) state.doff = offDistricts.join(',');
+
+    // Search
+    if (currentSearchQuery) state.q = currentSearchQuery;
+
+    // Condition filter sliders
+    if (evaluationActive) {
+        state.eval = 1;
+        const sv = sliderValues;
+        if (sv.deck > 0) state.cd = sv.deck;
+        if (sv.superstructure > 0) state.cs = sv.superstructure;
+        if (sv.substructure > 0) state.cb = sv.substructure;
+        if (sv.bearings > 0) state.cr = sv.bearings;
+        if (sv.joints > 0) state.cj = sv.joints;
+        if (sv.sufficiency < 100) state.sf = sv.sufficiency;
+        if (sufficiencyMode !== 'lte') state.sm = sufficiencyMode;
+    }
+
+    // Attributes filter
+    if (attributesFilterState.active) {
+        state.af = 1;
+        const a = attributesFilterState;
+        if (a.length.value < sliderMaxValues.length) state.al = a.length.value;
+        if (a.length.mode !== 'lte') state.alm = a.length.mode;
+        if (a.width.value < sliderMaxValues.width) state.aw = a.width.value;
+        if (a.width.mode !== 'lte') state.awm = a.width.mode;
+        if (a.area.value < sliderMaxValues.area) state.aa = a.area.value;
+        if (a.area.mode !== 'lte') state.aam = a.area.mode;
+        if (a.age.value < sliderMaxValues.age) state.ag = a.age.value;
+        if (a.age.mode !== 'lte') state.agm = a.age.mode;
+        if (a.adt.value < sliderMaxValues.adt) state.ad = a.adt.value;
+        if (a.adt.mode !== 'lte') state.adm = a.adt.mode;
+        if (a.nhs !== 'all') state.nhs = a.nhs;
+        if (a.utilities) state.util = 1;
+        if (a.onBridge.length > 0) state.ob = a.onBridge.join(',');
+        if (a.underBridge.length > 0) state.ub = a.underBridge.join(',');
+        if (a.bridgeType.length > 0) state.bt = a.bridgeType.join(',');
+        if (a.route) state.rt = a.route;
+        if (a.subroute) state.srt = a.subroute;
+        if (a.showNA) state.sna = 1;
+    }
+
+    // Inspection filters
+    if (inspectionFiltersActive) {
+        state.insp = 1;
+        if (selectedInspectionTypes.length > 0) state.it = selectedInspectionTypes.join(',');
+        if (selectedMonths.length > 0) state.im = selectedMonths.join(',');
+        if (showOverduePlus) state.odp = 1;
+    }
+
+    // HUB data mode
+    if (hubDataMode > 0) {
+        state.hub = hubDataMode;
+        if (hubFilterState.active) {
+            state.hf = 1;
+            if (hubFilterState.statuses.length > 0) state.hs = hubFilterState.statuses.join(',');
+            if (hubFilterState.phases.length > 0) state.hp = hubFilterState.phases.join(',');
+            if (hubFilterState.familyCodes.length > 0) state.hfc = hubFilterState.familyCodes.join(',');
+        }
+    }
+
+    // Count category state — only encode non-defaults
+    const ccs = countCategoryState;
+    const catParts = [];
+    if (!ccs.critical) catParts.push('c0');
+    if (!ccs.emergent) catParts.push('e0');
+    if (!ccs.satisfactory) catParts.push('s0');
+    if (!ccs.completed) catParts.push('p0');
+    if (ccs.na) catParts.push('n1');
+    if (ccs.hubdata) catParts.push('h1');
+    if (!ccs.total) catParts.push('t0');
+    if (catParts.length > 0) state.cat = catParts.join(',');
+
+    // Encode to hash
+    const params = new URLSearchParams(state);
+    const url = window.location.origin + window.location.pathname + '#' + params.toString();
+
+    // Copy to clipboard
+    navigator.clipboard.writeText(url).then(() => {
+        console.log('Shareable link copied to clipboard');
+        showShareLinkToast('Link copied to clipboard!');
+    }).catch(() => {
+        // Fallback
+        prompt('Copy this shareable link:', url);
+    });
+
+    return url;
+}
+
+function showShareLinkToast(message) {
+    const existing = document.getElementById('share-toast');
+    if (existing) existing.remove();
+
+    const toast = document.createElement('div');
+    toast.id = 'share-toast';
+    toast.textContent = message;
+    toast.style.cssText = 'position:fixed;bottom:30px;left:50%;transform:translateX(-50%);background:#003b5c;color:#FFB81C;padding:10px 24px;border-radius:6px;border:1px solid #FFB81C;font-weight:600;font-size:11pt;z-index:99999;opacity:0;transition:opacity 0.3s;pointer-events:none;';
+    document.body.appendChild(toast);
+    requestAnimationFrame(() => toast.style.opacity = '1');
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+    }, 2500);
+}
+
+function restoreFromUrl() {
+    const hash = window.location.hash.slice(1);
+    if (!hash) return false;
+
+    try {
+        const p = new URLSearchParams(hash);
+
+        // Map view
+        if (p.has('lat') && p.has('lng') && p.has('z')) {
+            map.setView([parseFloat(p.get('lat')), parseFloat(p.get('lng'))], parseInt(p.get('z')));
+        }
+
+        // Districts
+        if (p.has('doff')) {
+            p.get('doff').split(',').forEach(d => {
+                const key = 'District ' + d;
+                if (activeDistricts.hasOwnProperty(key)) {
+                    activeDistricts[key] = false;
+                    const cb = document.querySelector(`input[data-district="${key}"]`);
+                    if (cb) cb.checked = false;
+                }
+            });
+        }
+
+        // Search
+        if (p.has('q')) {
+            const searchInput = document.getElementById('searchInput');
+            if (searchInput) {
+                searchInput.value = p.get('q');
+                searchInput.dispatchEvent(new Event('input'));
+            }
+        }
+
+        // Condition filter
+        if (p.get('eval') === '1') {
+            if (p.has('cd')) sliderValues.deck = parseInt(p.get('cd'));
+            if (p.has('cs')) sliderValues.superstructure = parseInt(p.get('cs'));
+            if (p.has('cb')) sliderValues.substructure = parseInt(p.get('cb'));
+            if (p.has('cr')) sliderValues.bearings = parseInt(p.get('cr'));
+            if (p.has('cj')) sliderValues.joints = parseInt(p.get('cj'));
+            if (p.has('sf')) sliderValues.sufficiency = parseInt(p.get('sf'));
+            if (p.has('sm')) sufficiencyMode = p.get('sm');
+
+            // Update slider UI elements
+            ['deck', 'superstructure', 'substructure', 'bearings', 'joints'].forEach(key => {
+                const slider = document.getElementById(key + '-slider');
+                if (slider) slider.value = sliderValues[key];
+                const label = document.getElementById(key + '-value');
+                if (label) label.textContent = sliderValues[key] + '%';
+            });
+            const suffSlider = document.getElementById('sufficiency-slider');
+            if (suffSlider) suffSlider.value = sliderValues.sufficiency;
+            const suffLabel = document.getElementById('sufficiency-value');
+            if (suffLabel) suffLabel.textContent = sliderValues.sufficiency + '%';
+
+            evaluationActive = true;
+        }
+
+        // Attributes filter
+        if (p.get('af') === '1') {
+            const a = attributesFilterState;
+            a.active = true;
+            if (p.has('al')) a.length = { value: parseInt(p.get('al')), mode: p.get('alm') || 'lte' };
+            if (p.has('aw')) a.width = { value: parseInt(p.get('aw')), mode: p.get('awm') || 'lte' };
+            if (p.has('aa')) a.area = { value: parseInt(p.get('aa')), mode: p.get('aam') || 'lte' };
+            if (p.has('ag')) a.age = { value: parseInt(p.get('ag')), mode: p.get('agm') || 'lte' };
+            if (p.has('ad')) a.adt = { value: parseInt(p.get('ad')), mode: p.get('adm') || 'lte' };
+            if (p.has('nhs')) a.nhs = p.get('nhs');
+            if (p.get('util') === '1') a.utilities = true;
+            if (p.has('ob')) a.onBridge = p.get('ob').split(',');
+            if (p.has('ub')) a.underBridge = p.get('ub').split(',');
+            if (p.has('bt')) a.bridgeType = p.get('bt').split(',');
+            if (p.has('rt')) a.route = p.get('rt');
+            if (p.has('srt')) a.subroute = p.get('srt');
+            if (p.get('sna') === '1') a.showNA = true;
+        }
+
+        // Inspection filters
+        if (p.get('insp') === '1') {
+            inspectionFiltersActive = true;
+            if (p.has('it')) selectedInspectionTypes = p.get('it').split(',');
+            if (p.has('im')) selectedMonths = p.get('im').split(',').map(Number);
+            if (p.get('odp') === '1') showOverduePlus = true;
+        }
+
+        // HUB data mode
+        if (p.has('hub')) {
+            hubDataMode = parseInt(p.get('hub'));
+            if (p.get('hf') === '1') {
+                hubFilterState.active = true;
+                if (p.has('hs')) hubFilterState.statuses = p.get('hs').split(',');
+                if (p.has('hp')) hubFilterState.phases = p.get('hp').split(',');
+                if (p.has('hfc')) hubFilterState.familyCodes = p.get('hfc').split(',');
+            }
+        }
+
+        // Count category state
+        if (p.has('cat')) {
+            p.get('cat').split(',').forEach(tok => {
+                if (tok === 'c0') countCategoryState.critical = false;
+                if (tok === 'e0') countCategoryState.emergent = false;
+                if (tok === 's0') countCategoryState.satisfactory = false;
+                if (tok === 'p0') countCategoryState.completed = false;
+                if (tok === 'n1') countCategoryState.na = true;
+                if (tok === 'h1') countCategoryState.hubdata = true;
+                if (tok === 't0') countCategoryState.total = false;
+            });
+        }
+
+        // Clear hash so refresh doesn't re-apply (optional, keeps URL clean)
+        // history.replaceState(null, '', window.location.pathname);
+
+        console.log('✓ Restored view from shared link');
+        return true;
+    } catch (e) {
+        console.warn('Failed to restore from URL:', e);
+        return false;
+    }
+}
+
+// Expose globally for button/shortcut use
+window.generateShareableLink = generateShareableLink;
 
 // ==================== UI TOOLTIP SYSTEM ====================
 let uiTooltipsEnabled = true; // On by default
