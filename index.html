@@ -453,7 +453,7 @@
             transform: translateX(-50%);
             z-index: 1001;
             background: #376a81;
-            border: 2px solid var(--box-border);
+            border: 1px solid var(--wvdoh-yellow);
             border-radius: 8px;
             width: 240px;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
@@ -629,14 +629,14 @@
         .info-panel {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             z-index: 11000; background: var(--box-bg);
-            border: 2px solid var(--box-border); border-radius: 12px;
+            border: 1px solid var(--wvdoh-yellow); border-radius: 12px;
             min-width: 500px; max-width: 700px; max-height: 80vh;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
             backdrop-filter: blur(10px);
             cursor: default;
         }
         .info-header {
-            padding: 18px 20px; border-bottom: 1px solid var(--box-border);
+            padding: 18px 20px;
             display: flex; justify-content: space-between; align-items: center;
             background: var(--wvdoh-blue);
             border-radius: 10px 10px 0 0;
@@ -1528,11 +1528,11 @@
     
     <!-- COUNT REPORT BOX -->
     <div class="count-report" id="countReport" style="display: none;">
-        <div style="background: #003b5c; padding: 8px 12px; border-bottom: 2px solid var(--box-border); display: flex; justify-content: space-between; align-items: center; border-radius: 6px 6px 0 0; cursor: default;" id="countReportHeader">
+        <div style="background: #003b5c; padding: 6px 12px; display: flex; justify-content: space-between; align-items: center; border-radius: 6px 6px 0 0; cursor: default;" id="countReportHeader">
             <h4 style="margin: 0; color: var(--wvdoh-yellow); font-size: 11pt; text-transform: uppercase; letter-spacing: 1px; font-weight: 700;">Count Report</h4>
             <button onclick="closeCountReport()" style="background: transparent; color: #fff; border: none; cursor: pointer; font-weight: 700; font-size: 11pt; padding: 0; line-height: 1;">✕</button>
         </div>
-        <div id="countReportBody" style="padding: 8px 10px; border-radius: 0 0 6px 6px;">
+        <div id="countReportBody" style="padding: 6px 10px; border-radius: 0 0 6px 6px;">
             <!-- Buttons are built dynamically by buildCountReportButtons() -->
         </div>
     </div>

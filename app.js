@@ -11,7 +11,7 @@ let hubPanelActive = false;
 let currentMode = 'default';
 let currentZoom = 8;
 const wvBounds = [[37.206, -82.605], [40.621, -77.742]];
-const initialView = { bounds: wvBounds, padding: [100, 50], maxZoom: 8 }; // For resetting to WV overview
+const initialView = { bounds: wvBounds, padding: [30, 30] }; // For resetting to WV overview
 let hoveredBridge = null;
 let radialMenu = null;
 let nameTooltip = null;
@@ -25,6 +25,13 @@ let inspectionFiltersActive = false;
 let selectedInspectionTypes = [];
 let selectedMonths = [];
 let showOverduePlus = false;
+
+// Live URL update
+let _urlUpdateTimer = null;
+let _urlUpdateEnabled = false;
+
+// CR manual close tracking
+let crManuallyHidden = false;
 
 // District toggle state - all active by default
 let activeDistricts = {
@@ -135,18 +142,30 @@ async function init() {
         }
 
         // Initialize map with WV bounding box
-        map = L.map('map', { minZoom: 8 });
-        
-        // Center on West Virginia at zoom level 8
-        const wvCenter = [38.9135, -80.1735];
-        map.setView(wvCenter, 8);
-        
+        map = L.map('map', { minZoom: 7 });
+
+        // Temporary view until we fit to bridge data
+        map.setView([38.9135, -80.1735], 8);
+
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '© OpenStreetMap',
             maxZoom: 19
         }).addTo(map);
-        
+
         addBridges();
+
+        // Zoom to fit all bridge points
+        if (bridgesData.length > 0) {
+            const lats = bridgesData.map(b => parseFloat(b.latitude)).filter(v => !isNaN(v));
+            const lngs = bridgesData.map(b => parseFloat(b.longitude)).filter(v => !isNaN(v));
+            if (lats.length > 0 && lngs.length > 0) {
+                const dataBounds = [
+                    [Math.min(...lats), Math.min(...lngs)],
+                    [Math.max(...lats), Math.max(...lngs)]
+                ];
+                map.fitBounds(dataBounds, { padding: [30, 30] });
+            }
+        }
         createProjectRings();
         setupSearch();
         updateStats();
@@ -162,7 +181,9 @@ async function init() {
             updateDebugPanel();
             closeAllMenus();
         });
-        
+
+        map.on('moveend', updateUrlHash);
+
         initBoxSelect();
         initEasterEggs();
         checkMothmanDay();
@@ -174,8 +195,14 @@ async function init() {
             updateBridgeSizes();
         }
 
+        // Show CR with dual sections on load
+        updateCountReport();
+
         document.getElementById('loading').style.display = 'none';
         console.log('✓ SpanBase ready');
+
+        // Enable live URL updates after init settles
+        setTimeout(() => { _urlUpdateEnabled = true; }, 600);
         
     } catch(error) {
         console.error('ERROR:', error);
@@ -269,8 +296,8 @@ function addBridges() {
                 return;
             }
 
-            // HUB Data isolation mode or theme mode: go directly to project info
-            if (countCategoryState.hubdata || hubDataMode === 2) {
+            // HUB Data theme mode: go directly to project info
+            if (hubDataMode === 2) {
                 showProjectInfo(bridge);
                 return;
             }
@@ -432,7 +459,7 @@ function showRickRoll() {
     if (existing) existing.remove();
     const popup = document.createElement('div');
     popup.id = 'rickroll-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:#000;border:3px solid var(--wvdoh-yellow);border-radius:12px;padding:8px;box-shadow:0 8px 40px rgba(0,0,0,0.8);';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:#000;border:1px solid var(--wvdoh-yellow);border-radius:12px;padding:8px;box-shadow:0 8px 40px rgba(0,0,0,0.8);';
     popup.innerHTML = '<div style="position:relative;">' +
         '<button onclick="document.getElementById(\'rickroll-popup\').remove()" style="position:absolute;top:-4px;right:2px;background:none;border:none;color:#fff;font-size:16pt;cursor:pointer;z-index:1;">✕</button>' +
         '<iframe width="480" height="270" src="https://www.youtube.com/embed/Ay8lynMZ4mE?autoplay=1" frameborder="0" allow="autoplay;encrypted-media" allowfullscreen></iframe>' +
@@ -1584,7 +1611,9 @@ function createEvaluationPanel() {
                 // AUTO-APPLY: Activate evaluation mode and update immediately
                 evaluationActive = true;
                 currentMode = 'evaluation';
+                crManuallyHidden = false;
                 updateBridgeSizes();
+                updateUrlHash();
             });
         }
     });
@@ -1609,6 +1638,7 @@ window.resetSliders = function() {
 
 window.applyEvaluation = function() {
     updateBridgeSizes();
+    updateUrlHash();
 };
 
 window.resetMaintenanceTab = function() {
@@ -1655,11 +1685,12 @@ function setupSearch() {
         const originalValue = e.target.value.toUpperCase();
         currentSearchQuery = originalValue.trim();
         applySearch();
-        
+
         // Auto-zoom whenever query has 1+ characters (including after backspace)
         if (currentSearchQuery.length >= 1) {
             zoomToSearchResults();
         }
+        updateUrlHash();
     });
     
     // ESC key clears search (tab resets handled by the global ESC handler)
@@ -1752,7 +1783,7 @@ function createDebugPanel() {
 
     // Track viewport resize
     window.addEventListener('resize', updateDebugDynamic);
-    window.addEventListener('resize', positionProjectToggle);
+    // positionProjectToggle removed — HUB DATA button now lives in the CR
 
     updateDebugPanel();
 }
@@ -1915,7 +1946,7 @@ function showEasterEggList() {
     if (existing) { existing.remove(); return; }
     const popup = document.createElement('div');
     popup.id = 'egg-list-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:var(--wvdoh-blue);border:2px solid var(--wvdoh-yellow);border-radius:10px;padding:20px 28px;box-shadow:0 8px 40px rgba(0,0,0,0.7);max-width:460px;';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:var(--wvdoh-blue);border:1px solid var(--wvdoh-yellow);border-radius:10px;padding:20px 28px;box-shadow:0 8px 40px rgba(0,0,0,0.7);max-width:460px;';
     popup.innerHTML =
         '<button onclick="document.getElementById(\'egg-list-popup\').remove()" style="position:absolute;top:8px;right:12px;background:none;border:none;color:#fff;font-size:14pt;cursor:pointer;">✕</button>' +
         '<div style="color:var(--wvdoh-yellow);font-weight:700;font-size:12pt;margin-bottom:14px;">Easter Eggs</div>' +
@@ -1961,7 +1992,7 @@ function setupDistrictToggles() {
                     activeDistricts[district] = true;
                 });
                 legendItems.forEach(i => i.classList.remove('inactive'));
-                map.fitBounds(initialView.bounds, { padding: initialView.padding, maxZoom: initialView.maxZoom });
+                map.fitBounds(initialView.bounds, { padding: initialView.padding });
             } else {
                 // Turn off ALL districts except this one
                 Object.keys(activeDistricts).forEach(district => {
@@ -1984,9 +2015,10 @@ function setupDistrictToggles() {
             
             // Update toggle all button state
             syncToggleAllButton();
-            
+
             // Update bridge visibility
             updateBridgeVisibility();
+            updateUrlHash();
         });
     });
 }
@@ -2014,11 +2046,12 @@ window.toggleAllDistricts = function() {
         toggleBtn.textContent = 'All Off';
         
         // Zoom back to WV overview
-        map.fitBounds(initialView.bounds, { padding: initialView.padding, maxZoom: initialView.maxZoom });
+        map.fitBounds(initialView.bounds, { padding: initialView.padding });
     }
     
     // Update bridge visibility
     updateBridgeVisibility();
+    updateUrlHash();
 };
 
 function syncToggleAllButton() {
@@ -2219,6 +2252,7 @@ window.switchSection = function(section) {
 
 // Apply inspection filters
 window.applyInspectionFilters = function() {
+    crManuallyHidden = false;
     // Get selected inspection types
     selectedInspectionTypes = [];
     document.querySelectorAll('[id^="insp-"]:checked').forEach(cb => {
@@ -2245,6 +2279,7 @@ window.applyInspectionFilters = function() {
             Object.values(projectRingLayers).forEach(ring => {
                 if (ring._map) ring.remove();
             });
+            styleCRHubButton();
         }
 
         updateStatusBar();
@@ -2256,6 +2291,7 @@ window.applyInspectionFilters = function() {
         document.getElementById('statusBar').style.display = 'none';
         updateBridgeSizes(); // Reset to default
     }
+    updateUrlHash();
 };
 
 // Auto-apply inspection filters when checkboxes change
@@ -2323,6 +2359,7 @@ window.resetCurrentTab = function() {
         Object.values(projectRingLayers).forEach(ring => {
             if (ring._map) ring.remove();
         });
+        styleCRHubButton();
     }
 
     // Reset all CR category state to defaults
@@ -2375,6 +2412,10 @@ document.addEventListener('keydown', function(e) {
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         resetCurrentTab();
+        // Clear live URL hash back to clean index
+        if (window.location.hash.length > 1) {
+            history.replaceState(null, '', window.location.pathname);
+        }
     }
 });
 
@@ -2795,6 +2836,7 @@ window.toggleAttributesPanel = function() {
         if (hubPanel) { hubPanel.classList.add('open'); hubPanel.classList.remove('ontop'); }
         if (hubPanelActive) { hubPanelActive = false; updateBridgeSizes(); }
     }
+    updateUrlHash();
 };
 
 // Condition filter toggle
@@ -2819,6 +2861,7 @@ window.toggleEvaluationPanel = function() {
         if (hubPanel) { hubPanel.classList.add('open'); hubPanel.classList.remove('ontop'); }
         if (hubPanelActive) { hubPanelActive = false; updateBridgeSizes(); }
     }
+    updateUrlHash();
 };
 
 // ===== ATTRIBUTES FILTER SYSTEM (v7.0.7) =====
@@ -3132,6 +3175,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Apply attributes filter and update bridge visibility
 function applyAttributesFilter() {
+    crManuallyHidden = false;
     // Check if any filter is active
     const isActive =
         attributesFilterState.showNA ||
@@ -3199,6 +3243,8 @@ function applyAttributesFilter() {
     if (isActive) {
         autoZoomToFilteredBridges();
     }
+
+    updateUrlHash();
 }
 
 // Check if bridge passes attributes filter
@@ -3661,10 +3707,10 @@ function buildCountReportButtons(mode) {
     const body = document.getElementById('countReportBody');
     if (!body) return;
 
-    const btnStyle = 'display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 5px 8px; margin-bottom: 3px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; transition: all 0.2s;';
+    const btnStyle = 'display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 4px 8px; margin-bottom: 2px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; transition: all 0.2s;';
     const dotStyle = 'width: 10px; height: 10px; border-radius: 50%; border: 1px solid #fff;';
     const labelStyle = 'color: #fff; font-weight: 600; font-size: 9pt;';
-    const countStyle = 'color: #fff; font-size: 12pt; font-weight: 700;';
+    const countStyle = 'color: #fff; font-size: 10pt; font-weight: 700;';
 
     let html = '';
 
@@ -3740,6 +3786,86 @@ function buildCountReportButtons(mode) {
                 </div>
             </button>`;
         }
+    } else if (mode === 'both') {
+        // Dual-section mode: Maintenance + Inspection
+        const sectionLabelStyle = 'color: #FFB81C; font-weight: 700; font-size: 8pt; text-transform: uppercase; letter-spacing: 1.5px; padding: 4px 0 2px 2px; margin-top: 2px;';
+
+        // — Maintenance section —
+        html += `<div style="${sectionLabelStyle}">Maintenance</div>`;
+        html += `<button id="btn-maint-critical" onclick="toggleCountCategory('critical')" style="${btnStyle}">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="${dotStyle} background: #dc2626;"></div>
+                <span style="${labelStyle}">Critical</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="${countStyle}" id="count-maint-critical">0</span>
+                <span onclick="event.stopPropagation(); showMaintenanceCategoryTable('critical')"
+                      style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
+            </div>
+        </button>`;
+        html += `<button id="btn-maint-emergent" onclick="toggleCountCategory('emergent')" style="${btnStyle}">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="${dotStyle} background: #F97316;"></div>
+                <span style="${labelStyle}">Emergent</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="${countStyle}" id="count-maint-emergent">0</span>
+                <span onclick="event.stopPropagation(); showMaintenanceCategoryTable('emergent')"
+                      style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
+            </div>
+        </button>`;
+        html += `<button id="btn-maint-satisfactory" onclick="toggleCountCategory('satisfactory')" style="${btnStyle}">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="${dotStyle} background: #10b981;"></div>
+                <span style="${labelStyle}">Satisfactory</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="${countStyle}" id="count-maint-satisfactory">0</span>
+                <span onclick="event.stopPropagation(); showMaintenanceCategoryTable('satisfactory')"
+                      style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
+            </div>
+        </button>`;
+
+        // — Inspection section —
+        html += `<div style="${sectionLabelStyle} margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.15); padding-top: 6px;">Inspection</div>`;
+        html += `<button id="btn-insp-critical" onclick="toggleCountCategory('critical')" style="${btnStyle}">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="${dotStyle} background: #dc2626;"></div>
+                <span style="${labelStyle}">Past Due</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="${countStyle}" id="count-insp-critical">0</span>
+                <span onclick="event.stopPropagation(); showCategoryTableForBothMode('critical')"
+                      style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
+            </div>
+        </button>`;
+        html += `<button id="btn-insp-emergent" onclick="toggleCountCategory('emergent')" style="${btnStyle}">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="${dotStyle} background: #F97316;"></div>
+                <span style="${labelStyle}">Upcoming</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="${countStyle}" id="count-insp-emergent">0</span>
+                <span onclick="event.stopPropagation(); showCategoryTableForBothMode('emergent')"
+                      style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
+            </div>
+        </button>`;
+        html += `<button id="btn-insp-satisfactory" onclick="toggleCountCategory('satisfactory')" style="${btnStyle}">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="${dotStyle} background: #10B981;"></div>
+                <span style="${labelStyle}">Completed</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="${countStyle}" id="count-insp-satisfactory">0</span>
+                <span onclick="event.stopPropagation(); showCategoryTableForBothMode('satisfactory')"
+                      style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
+            </div>
+        </button>`;
+    }
+
+    // Separator before shared buttons in 'both' mode
+    if (mode === 'both') {
+        html += `<div style="margin-top: 6px; border-top: 1px solid rgba(255,255,255,0.15); padding-top: 4px;"></div>`;
     }
 
     // N/A — always present
@@ -3752,18 +3878,19 @@ function buildCountReportButtons(mode) {
     </button>`;
 
     // HUB Data — always present (extra bottom margin before Total)
-    html += `<button id="btn-hubdata" onclick="toggleCountCategory('hubdata')" style="${btnStyle} margin-bottom: 6px;">
+    // Cycles through 3 modes: Off (blue) → Rings (yellow) → Theme (green)
+    html += `<button id="btn-hubdata" onclick="toggleProjectRings()" style="${btnStyle} margin-bottom: 6px;">
         <div style="display: flex; align-items: center; gap: 8px;">
-            <div style="${dotStyle} background: #22c55e;"></div>
-            <span style="${labelStyle}">HUB Data</span>
+            <div id="hubdata-dot" style="${dotStyle} background: #22c55e;"></div>
+            <span id="hubdata-label" style="${labelStyle}">HUB Data</span>
         </div>
         <span style="${countStyle}" id="count-hubdata">0</span>
     </button>`;
 
     // Total — always present
-    html += `<button id="btn-total" onclick="toggleCountCategory('total')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 6px 8px; background: rgba(255,184,28,0.1); border: 2px solid var(--wvdoh-yellow); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
+    html += `<button id="btn-total" onclick="toggleCountCategory('total')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 4px 8px; background: rgba(255,184,28,0.1); border: 2px solid var(--wvdoh-yellow); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
         <span style="color: var(--wvdoh-yellow); font-weight: 700; font-size: 9pt; text-transform: uppercase; letter-spacing: 1px;">TOTAL</span>
-        <span style="color: var(--wvdoh-yellow); font-size: 12pt; font-weight: 700;" id="count-total">0</span>
+        <span style="color: var(--wvdoh-yellow); font-size: 10pt; font-weight: 700;" id="count-total">0</span>
     </button>`;
 
     body.innerHTML = html;
@@ -3948,6 +4075,62 @@ function calculateMaxBridgeCounts() {
     });
 
     return { critical, emergent, satisfactory, completed, na, hubdata, total: critical + emergent + satisfactory + completed + na };
+}
+
+// Calculate inspection counts for 'both' mode CR (parallel to calculateMaxBridgeCounts)
+function calculateInspectionCounts() {
+    let critical = 0;   // Past Due
+    let emergent = 0;   // Upcoming (within 60 days)
+    let satisfactory = 0; // Completed / future
+    let na = 0;
+
+    const today = new Date();
+    const sixtyDays = new Date(today.getTime() + 60 * 24 * 60 * 60 * 1000);
+
+    Object.entries(bridgeLayers).forEach(([bars, marker]) => {
+        const bridge = marker.bridgeData;
+        if (!bridge) return;
+
+        // Apply same base filters as calculateMaxBridgeCounts
+        if (!activeDistricts[bridge.district]) return;
+
+        if (currentSearchQuery.length > 0) {
+            const barsUpper = (bridge.bars_number || '').toUpperCase();
+            const name = (bridge.bridge_name || '').toUpperCase();
+            const isNumericSearch = /^\d/.test(currentSearchQuery);
+            const matchesBars = isNumericSearch ? barsUpper.startsWith(currentSearchQuery) : barsUpper.includes(currentSearchQuery);
+            const matchesName = isNumericSearch ? name.startsWith(currentSearchQuery) : name.includes(currentSearchQuery);
+            if (!matchesBars && !matchesName) return;
+        }
+
+        if (typeof attributesFilterState !== 'undefined' && attributesFilterState.active) {
+            if (!bridgePassesAttributesFilter(bridge)) return;
+        }
+
+        if (boxExcludedBars.has(bars)) return;
+
+        // Inspection categorization
+        const inspections = inspectionsData[bars];
+        if (!inspections || inspections.length === 0) {
+            na++;
+            return;
+        }
+
+        let hasOverdue = false, hasUpcoming = false;
+
+        inspections.forEach(insp => {
+            const due = parseDateString(insp.due);
+            if (!due) return;
+            if (due < today) hasOverdue = true;
+            else if (due <= sixtyDays) hasUpcoming = true;
+        });
+
+        if (hasOverdue) critical++;
+        else if (hasUpcoming) emergent++;
+        else satisfactory++;
+    });
+
+    return { critical, emergent, satisfactory, na, total: critical + emergent + satisfactory + na };
 }
 
 // Category label mapping for inspection CR table popups
@@ -4284,6 +4467,20 @@ function _restoreCategoryPopupPos(pos) {
     popup.style.transform = 'none';
 }
 
+// Show inspection category table from 'both' mode (temporarily activates inspection logic)
+function showCategoryTableForBothMode(category) {
+    const wasActive = inspectionFiltersActive;
+    const wasSIT = selectedInspectionTypes.slice();
+    const wasSM = selectedMonths.slice();
+    inspectionFiltersActive = true;
+    selectedInspectionTypes = [];
+    selectedMonths = [];
+    showCategoryTable(category);
+    inspectionFiltersActive = wasActive;
+    selectedInspectionTypes = wasSIT;
+    selectedMonths = wasSM;
+}
+
 // Show a detail table popup for a maintenance CR category
 function showMaintenanceCategoryTable(category) {
     const savedPos = _saveCategoryPopupPos();
@@ -4618,8 +4815,13 @@ function updateCountReport() {
     const hasAttributes = typeof attributesFilterState !== 'undefined' && attributesFilterState.active;
 
     // Determine which button set we need
-    const needFull = hasCondition || inspectionFiltersActive || hasAttributes || currentSearchQuery.length > 0;
-    const targetMode = needFull ? 'full' : 'default';
+    const filtersEngaged = hasCondition || inspectionFiltersActive || hasAttributes || currentSearchQuery.length > 0;
+    let targetMode;
+    if (filtersEngaged) {
+        targetMode = 'full';
+    } else {
+        targetMode = 'both'; // No specific filter — show dual Maintenance + Inspection
+    }
 
     // Build/rebuild buttons if mode changed
     buildCountReportButtons(targetMode);
@@ -4627,18 +4829,44 @@ function updateCountReport() {
     // Calculate max counts (from ALL bridges)
     maxCounts = calculateMaxBridgeCounts();
 
-    // Update counts — guard elements that may not exist in default mode
-    const elCritical = document.getElementById('count-critical');
-    const elEmergent = document.getElementById('count-emergent');
-    const elSatisfactory = document.getElementById('count-satisfactory');
-    const elCompleted = document.getElementById('count-completed');
-    if (elCritical) elCritical.textContent = maxCounts.critical;
-    if (elEmergent) elEmergent.textContent = maxCounts.emergent;
-    if (elSatisfactory) elSatisfactory.textContent = maxCounts.satisfactory;
-    if (elCompleted) elCompleted.textContent = maxCounts.completed;
-    document.getElementById('count-na').textContent = maxCounts.na;
-    document.getElementById('count-hubdata').textContent = maxCounts.hubdata;
-    document.getElementById('count-total').textContent = maxCounts.total;
+    if (targetMode === 'both') {
+        // Dual-section mode: populate both sets of counts
+        const inspCounts = calculateInspectionCounts();
+
+        // Maintenance counts
+        const elMC = document.getElementById('count-maint-critical');
+        const elME = document.getElementById('count-maint-emergent');
+        const elMS = document.getElementById('count-maint-satisfactory');
+        if (elMC) elMC.textContent = maxCounts.critical;
+        if (elME) elME.textContent = maxCounts.emergent;
+        if (elMS) elMS.textContent = maxCounts.satisfactory;
+
+        // Inspection counts
+        const elIC = document.getElementById('count-insp-critical');
+        const elIE = document.getElementById('count-insp-emergent');
+        const elIS = document.getElementById('count-insp-satisfactory');
+        if (elIC) elIC.textContent = inspCounts.critical;
+        if (elIE) elIE.textContent = inspCounts.emergent;
+        if (elIS) elIS.textContent = inspCounts.satisfactory;
+
+        // Shared bottom buttons
+        document.getElementById('count-na').textContent = maxCounts.na;
+        document.getElementById('count-hubdata').textContent = maxCounts.hubdata;
+        document.getElementById('count-total').textContent = maxCounts.total;
+    } else {
+        // Single-mode (full): existing behavior
+        const elCritical = document.getElementById('count-critical');
+        const elEmergent = document.getElementById('count-emergent');
+        const elSatisfactory = document.getElementById('count-satisfactory');
+        const elCompleted = document.getElementById('count-completed');
+        if (elCritical) elCritical.textContent = maxCounts.critical;
+        if (elEmergent) elEmergent.textContent = maxCounts.emergent;
+        if (elSatisfactory) elSatisfactory.textContent = maxCounts.satisfactory;
+        if (elCompleted) elCompleted.textContent = maxCounts.completed;
+        document.getElementById('count-na').textContent = maxCounts.na;
+        document.getElementById('count-hubdata').textContent = maxCounts.hubdata;
+        document.getElementById('count-total').textContent = maxCounts.total;
+    }
 
     const btnCritical = document.getElementById('btn-critical');
     const btnEmergent = document.getElementById('btn-emergent');
@@ -4711,18 +4939,14 @@ function updateCountReport() {
         }
     }
 
-    // HUB Data button — always present
+    // HUB Data button — always clickable, cycles through 3 modes (off/rings/theme)
     if (btnHubdata) {
-        if (maxCounts.hubdata > 0) {
-            btnHubdata.disabled = false;
-            btnHubdata.style.cursor = 'pointer';
-            btnHubdata.title = 'Click to isolate HUB Data bridges';
-            btnHubdata.style.opacity = countCategoryState.hubdata ? '1.0' : '0.5';
-        } else {
-            btnHubdata.style.opacity = '0.3';
-            btnHubdata.style.cursor = 'not-allowed';
-            btnHubdata.disabled = true;
-        }
+        btnHubdata.disabled = false;
+        btnHubdata.style.cursor = 'pointer';
+        btnHubdata.title = hubDataMode === 0 ? 'Click to show HUB Data rings' :
+                           hubDataMode === 1 ? 'Click for HUB Data theme mode' :
+                                               'Click to turn off HUB Data';
+        styleCRHubButton();
     }
 
     // Total button always available
@@ -4737,10 +4961,20 @@ function updateCountReport() {
     // Update button border styles
     updateButtonStyles();
 
-    // Show box only when a filter is actually active (sliders moved, not just evaluation mode)
+    // Show/hide the CR box
     const countReport = document.getElementById('countReport');
-    const filtersEngaged = hasCondition || inspectionFiltersActive || hasAttributes || currentSearchQuery.length > 0;
-    if (filtersEngaged && maxCounts.total > 0 && countReport.style.display !== 'block') {
+    if (targetMode === 'both') {
+        // Both mode: show on load unless user manually closed
+        if (!crManuallyHidden && maxCounts.total > 0 && countReport.style.display !== 'block') {
+            countReport.style.display = 'block';
+            const header = document.getElementById('countReportHeader');
+            if (header && !countReport.dataset.draggable) {
+                makeDraggable(countReport, header);
+                countReport.dataset.draggable = 'true';
+            }
+            positionCountReportOutsideBridges();
+        }
+    } else if (filtersEngaged && maxCounts.total > 0 && countReport.style.display !== 'block') {
         countReport.style.display = 'block';
         const header = document.getElementById('countReportHeader');
         if (header && !countReport.dataset.draggable) {
@@ -4748,7 +4982,7 @@ function updateCountReport() {
             countReport.dataset.draggable = 'true';
         }
         positionCountReportOutsideBridges();
-    } else if (!filtersEngaged && countReport.style.display === 'block') {
+    } else if (!filtersEngaged && targetMode !== 'both' && countReport.style.display === 'block') {
         closeCountReport();
     }
 }
@@ -4765,12 +4999,16 @@ function positionCountReportOutsideBridges() {
     const legendRect = legend.getBoundingClientRect();
     const mapRect = map.getContainer().getBoundingClientRect();
 
+    // Match CR height to legend height
+    const legendHeight = legendRect.height;
+    countReport.style.height = legendHeight + 'px';
+    countReport.style.overflow = 'hidden';
+
     // CR is position:absolute inside the map container
     // Bottom-align: CR bottom = legend bottom (relative to map container)
     const legendBottom = legendRect.bottom - mapRect.top;
     const crWidth = 240;
-    const crHeight = countReport.offsetHeight || 320;
-    const top = legendBottom - crHeight;
+    const top = legendBottom - legendHeight;
     const left = legendRect.left - mapRect.left - crWidth - 10; // 10px gap
 
     countReport.style.top = Math.max(10, top) + 'px';
@@ -4778,15 +5016,30 @@ function positionCountReportOutsideBridges() {
     countReport.style.transform = 'none';
 }
 
+// Re-home CR beside districts box on window resize
+window.addEventListener('resize', function() {
+    const countReport = document.getElementById('countReport');
+    if (countReport && countReport.style.display === 'block') {
+        positionCountReportOutsideBridges();
+    }
+});
+
 // Update button visual states
 function updateButtonStyles() {
     const buttons = [
-        { id: 'btn-critical',     key: 'critical',     color: '#dc2626' },
-        { id: 'btn-emergent',     key: 'emergent',     color: '#F97316' },
-        { id: 'btn-completed',    key: 'completed',    color: '#10B981' },
-        { id: 'btn-satisfactory', key: 'satisfactory', color: '#10b981' },
-        { id: 'btn-na',           key: 'na',           color: '#6b7280' },
-        { id: 'btn-hubdata',      key: 'hubdata',      color: '#22c55e' }
+        { id: 'btn-critical',          key: 'critical',     color: '#dc2626' },
+        { id: 'btn-emergent',          key: 'emergent',     color: '#F97316' },
+        { id: 'btn-completed',         key: 'completed',    color: '#10B981' },
+        { id: 'btn-satisfactory',      key: 'satisfactory', color: '#10b981' },
+        { id: 'btn-na',                key: 'na',           color: '#6b7280' },
+        // btn-hubdata styled separately by styleCRHubButton() based on hubDataMode
+        // Both-mode buttons
+        { id: 'btn-maint-critical',    key: 'critical',     color: '#dc2626' },
+        { id: 'btn-maint-emergent',    key: 'emergent',     color: '#F97316' },
+        { id: 'btn-maint-satisfactory',key: 'satisfactory', color: '#10b981' },
+        { id: 'btn-insp-critical',     key: 'critical',     color: '#dc2626' },
+        { id: 'btn-insp-emergent',     key: 'emergent',     color: '#F97316' },
+        { id: 'btn-insp-satisfactory', key: 'satisfactory', color: '#10B981' }
     ];
 
     buttons.forEach(({ id, key, color }) => {
@@ -4890,23 +5143,13 @@ window.toggleCountCategory = function(category) {
 
     // Auto-zoom
     setTimeout(autoZoomToFilteredBridges, 100);
+    updateUrlHash();
 };
 
 // Sync Hub Button (projectToggle) state based on CRHUB isolation
 function syncHubButton() {
-    const btn = document.getElementById('projectToggle');
-    if (!btn) return;
-    if (countCategoryState.hubdata) {
-        // CRHUB active — grey out the Hub Button
-        btn.style.opacity = '0.3';
-        btn.style.pointerEvents = 'none';
-        btn.style.cursor = 'not-allowed';
-    } else {
-        // CRHUB inactive — restore Hub Button to current hubDataMode state
-        btn.style.opacity = '1';
-        btn.style.pointerEvents = 'auto';
-        btn.style.cursor = 'pointer';
-    }
+    // Standalone button is hidden; just update CR button styling
+    styleCRHubButton();
 }
 
 // Apply category filter
@@ -5164,6 +5407,7 @@ window.closeCountReport = function() {
     document.getElementById('countReport').style.display = 'none';
     crButtonMode = null; // force rebuild on next open
     crButtonInspection = null;
+    crManuallyHidden = true;
 };
 
 // ========================================
@@ -5188,7 +5432,7 @@ function positionProjectToggle() {
 
 function createProjectRings() {
     if (!projectsData || Object.keys(projectsData).length === 0) return;
-    positionProjectToggle();
+    // HUB DATA button above districts is hidden; CR HUB Data button handles cycling now
 
     const ringSize = getPointSize() + 4;
 
@@ -5264,8 +5508,11 @@ window.toggleProjectRings = function() {
     hubDataMode = (hubDataMode + 1) % 3;
     projectRingsVisible = hubDataMode === 1;
 
+    // Update standalone button if visible (tour mode)
     const btn = document.getElementById('projectToggle');
-    btn.classList.remove('active', 'theme');
+    if (btn) {
+        btn.classList.remove('active', 'theme');
+    }
 
     if (hubDataMode === 0) {
         // Off: remove rings, restore normal bridge rendering
@@ -5278,18 +5525,56 @@ window.toggleProjectRings = function() {
         }
     } else if (hubDataMode === 1) {
         // On: show rings + HUB Data radial menu option
-        btn.classList.add('active');
+        if (btn) btn.classList.add('active');
         updateProjectRings();
     } else {
         // Theme: green HUB dots only, no rings
-        btn.classList.add('theme');
+        if (btn) btn.classList.add('theme');
         Object.values(projectRingLayers).forEach(ring => {
             if (ring._map) ring.remove();
         });
         updateBridgeSizes();
         applyCountCategoryFilter();
     }
+
+    // Update CR HUB Data button styling to reflect mode
+    styleCRHubButton();
+    updateUrlHash();
 };
+
+// Style the CR HUB Data button to reflect the current hubDataMode
+function styleCRHubButton() {
+    const crBtn = document.getElementById('btn-hubdata');
+    if (!crBtn) return;
+    const dot = document.getElementById('hubdata-dot');
+    const label = document.getElementById('hubdata-label');
+
+    if (hubDataMode === 0) {
+        // Off: normal look, full opacity
+        crBtn.style.background = 'transparent';
+        crBtn.style.borderColor = 'rgba(255,255,255,0.2)';
+        crBtn.style.borderWidth = '1px';
+        crBtn.style.opacity = '1';
+        if (dot) dot.style.background = '#22c55e';
+        if (label) label.style.color = '#fff';
+    } else if (hubDataMode === 1) {
+        // Rings: yellow highlight (matches standalone .active state)
+        crBtn.style.background = 'rgba(255,184,28,0.15)';
+        crBtn.style.borderColor = '#FFB81C';
+        crBtn.style.borderWidth = '2px';
+        crBtn.style.opacity = '1';
+        if (dot) dot.style.background = '#FFB81C';
+        if (label) label.style.color = '#FFB81C';
+    } else {
+        // Theme: green highlight (matches standalone .theme state)
+        crBtn.style.background = 'rgba(34,197,94,0.15)';
+        crBtn.style.borderColor = '#22c55e';
+        crBtn.style.borderWidth = '2px';
+        crBtn.style.opacity = '1';
+        if (dot) dot.style.background = '#22c55e';
+        if (label) label.style.color = '#22c55e';
+    }
+}
 
 // ========================================
 // GUIDED TOUR
@@ -5394,7 +5679,7 @@ const tourSteps = [
             map.boxZoom.enable();
             map.keyboard.enable();
             closeAllMenus();
-            map.fitBounds(wvBounds, { padding: [100, 50], maxZoom: 8 });
+            map.fitBounds(wvBounds, { padding: [30, 30] });
         }
     },
     // Step 7: Box Select — open AF, highlight route search, Ctrl+drag demo
@@ -5589,11 +5874,11 @@ const tourSteps = [
             updateBridgeSizes();
         }
     },
-    // Step 8: HUB Data interactive — user cycles the button
+    // Step 8: HUB Data interactive — user cycles the button (temporarily shows standalone button for tour)
     {
         target: '#projectToggle',
         title: 'HUB Data Button',
-        text: 'This button cycles through three modes:\n\n\u2022 Blue (off) \u2014 Normal bridge view, no project data.\n\u2022 Yellow \u2014 Green rings appear around bridges with project data. All bridges stay visible so you can see current conditions AND financials side-by-side.\n\u2022 Green \u2014 Only HUB data bridges remain.\n\nGive it a click and watch it cycle!',
+        text: 'This button cycles through three modes:\n\n\u2022 Blue (off) \u2014 Normal bridge view, no project data.\n\u2022 Yellow \u2014 Green rings appear around bridges with project data. All bridges stay visible so you can see current conditions AND financials side-by-side.\n\u2022 Green \u2014 Only HUB data bridges remain.\n\nGive it a click and watch it cycle!\n\nOutside the tour, this same button lives in the Count Report.',
         position: 'left',
         onEnter: function() {
             const condPanel = document.getElementById('evaluationPanel');
@@ -5606,6 +5891,8 @@ const tourSteps = [
         },
         onExit: function() {
             document.getElementById('projectToggle').style.zIndex = '';
+            // Hide the standalone button again (it only shows during tour)
+            document.getElementById('projectToggle').style.display = 'none';
             // Reset HUB mode back to off
             if (hubDataMode !== 0) {
                 hubDataMode = 0;
@@ -5616,6 +5903,7 @@ const tourSteps = [
                     if (ring._map) ring.remove();
                 });
                 updateBridgeSizes();
+                styleCRHubButton();
             }
         }
     },
@@ -5788,9 +6076,12 @@ function restoreTourState() {
         hubDataMode = tourPreState.hubMode;
         projectRingsVisible = tourPreState.hubRingsVisible;
         const hubBtn = document.getElementById('projectToggle');
-        hubBtn.classList.remove('active', 'theme');
-        if (hubDataMode === 1) hubBtn.classList.add('active');
-        else if (hubDataMode === 2) hubBtn.classList.add('theme');
+        if (hubBtn) {
+            hubBtn.classList.remove('active', 'theme');
+            hubBtn.style.display = 'none'; // Keep hidden after tour
+            if (hubDataMode === 1) hubBtn.classList.add('active');
+            else if (hubDataMode === 2) hubBtn.classList.add('theme');
+        }
         if (!projectRingsVisible) {
             Object.values(projectRingLayers).forEach(ring => {
                 if (ring._map) ring.remove();
@@ -5798,6 +6089,7 @@ function restoreTourState() {
         } else {
             updateProjectRings();
         }
+        styleCRHubButton();
     }
 
     // Restore map view
@@ -5859,8 +6151,9 @@ function restoreTourState() {
     map.boxZoom.enable();
     map.keyboard.enable();
 
-    // Reset HUB button z-index in case we quit during step 7
-    document.getElementById('projectToggle').style.zIndex = '';
+    // Reset HUB button z-index and hide it (only shown during tour)
+    const hubToggle = document.getElementById('projectToggle');
+    if (hubToggle) { hubToggle.style.zIndex = ''; hubToggle.style.display = 'none'; }
 
     // Clear search in case we quit during step 10
     document.getElementById('searchInput').value = '';
@@ -6136,6 +6429,8 @@ window.endTour = function() {
 function onTourKeydown(e) {
     if (!tourActive) return;
     if (e.key === 'Escape') endTour();
+    if (e.key === 'ArrowRight') { e.preventDefault(); nextTourStep(); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); prevTourStep(); }
 }
 
 function onTourResize() {
@@ -6425,7 +6720,7 @@ function showHitchhikerEgg() {
     if (existing) existing.remove();
     const popup = document.createElement('div');
     popup.id = 'egg-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:url(galaxy42.jpg) center/cover no-repeat;border:3px solid var(--wvdoh-yellow);border-radius:12px;padding:30px 40px;box-shadow:0 8px 40px rgba(0,0,0,0.8);text-align:center;width:570px;';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:url(galaxy42.jpg) center/cover no-repeat;border:1px solid var(--wvdoh-yellow);border-radius:12px;padding:30px 40px;box-shadow:0 8px 40px rgba(0,0,0,0.8);text-align:center;width:570px;';
     popup.innerHTML =
         '<button onclick="document.getElementById(\'egg-popup\').remove()" style="position:absolute;top:8px;right:12px;background:none;border:none;color:#fff;font-size:16pt;cursor:pointer;text-shadow:0 0 6px #000;">✕</button>' +
         '<div style="font-size:48pt;margin-bottom:12px;text-shadow:0 0 20px rgba(0,0,0,0.9),0 0 40px rgba(0,0,0,0.7);">42</div>' +
@@ -6457,7 +6752,7 @@ function triggerKonamiEgg() {
     if (existing) existing.remove();
     const popup = document.createElement('div');
     popup.id = 'egg-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:#000;border:4px solid #fff;border-radius:0;padding:30px 50px;box-shadow:0 0 60px rgba(0,0,0,0.9);text-align:center;image-rendering:pixelated;';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:#000;border:1px solid var(--wvdoh-yellow);border-radius:0;padding:30px 50px;box-shadow:0 0 60px rgba(0,0,0,0.9);text-align:center;image-rendering:pixelated;';
     popup.innerHTML =
         '<div style="font-family:\'Courier New\',monospace;color:#fff;font-size:11pt;margin-bottom:12px;letter-spacing:2px;">PLAYER 1</div>' +
         '<div style="font-family:\'Courier New\',monospace;color:#ff0;font-size:36pt;font-weight:900;letter-spacing:6px;text-shadow:3px 3px 0 #c00;margin-bottom:12px;">30 BRIDGES</div>' +
@@ -6605,7 +6900,7 @@ function showCountryRoadsEgg() {
     if (existing) existing.remove();
     const popup = document.createElement('div');
     popup.id = 'egg-popup';
-    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:linear-gradient(135deg,#1a3a5c,#002244);border:3px solid var(--wvdoh-yellow);border-radius:12px;padding:10px;box-shadow:0 8px 40px rgba(0,0,0,0.8);text-align:center;';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:linear-gradient(135deg,#1a3a5c,#002244);border:1px solid var(--wvdoh-yellow);border-radius:12px;padding:10px;box-shadow:0 8px 40px rgba(0,0,0,0.8);text-align:center;';
     popup.innerHTML =
         '<div style="position:relative;">' +
         '<button onclick="document.getElementById(\'egg-popup\').remove()" style="position:absolute;top:-4px;right:2px;background:none;border:none;color:#fff;font-size:16pt;cursor:pointer;z-index:1;">✕</button>' +
@@ -6716,56 +7011,56 @@ function checkFlatwoodsDay(force) {
     // Green mist layers — edges of screen
     const mist = document.createElement('div');
     mist.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;transition:opacity 3s ease 0.5s;pointer-events:none;' +
-        'background:radial-gradient(ellipse at 50% 100%, rgba(0,80,20,0.4) 0%, transparent 60%),' +
-        'radial-gradient(ellipse at 0% 50%, rgba(0,60,10,0.3) 0%, transparent 50%),' +
-        'radial-gradient(ellipse at 100% 50%, rgba(0,60,10,0.3) 0%, transparent 50%),' +
-        'radial-gradient(ellipse at 50% 0%, rgba(0,40,10,0.2) 0%, transparent 40%);';
+        'background:radial-gradient(ellipse at 50% 100%, rgba(0,96,24,0.48) 0%, transparent 60%),' +
+        'radial-gradient(ellipse at 0% 50%, rgba(0,72,12,0.36) 0%, transparent 50%),' +
+        'radial-gradient(ellipse at 100% 50%, rgba(0,72,12,0.36) 0%, transparent 50%),' +
+        'radial-gradient(ellipse at 50% 0%, rgba(0,48,12,0.24) 0%, transparent 40%);';
     overlay.appendChild(mist);
 
     // Descending orb — the "meteor"
     const orb = document.createElement('div');
-    orb.style.cssText = 'position:absolute;top:-60px;left:50%;transform:translateX(-50%);width:24px;height:24px;border-radius:50%;' +
+    orb.style.cssText = 'position:absolute;top:-60px;left:50%;transform:translateX(-50%);width:24px;height:24px;border-radius:50%;z-index:10;' +
         'background:radial-gradient(circle,#88ff88 20%,#44cc44 50%,#008800 80%,transparent 100%);' +
         'box-shadow:0 0 30px #44ff44,0 0 60px #22cc22,0 0 100px rgba(0,255,0,0.3);' +
-        'opacity:0;transition:opacity 1s ease 1.5s;';
+        'opacity:0;transition:opacity 1s ease 1.5s;pointer-events:none;';
     overlay.appendChild(orb);
 
-    // Creature silhouette — spade-shaped head with body
+    // Creature silhouette — SVG from FM.kmz vector data
     const creature = document.createElement('div');
-    creature.style.cssText = 'position:absolute;bottom:-400px;left:50%;transform:translateX(-50%);opacity:0;transition:opacity 2s ease 6s,bottom 4s ease 6s;display:flex;flex-direction:column;align-items:center;';
+    creature.style.cssText = 'position:absolute;bottom:-500px;left:50%;transform:translateX(-50%);opacity:0;transition:opacity 3s ease 6s,bottom 5s ease 6s;z-index:1;';
 
-    // Spade/ace-of-spades head shape using CSS
-    const head = document.createElement('div');
-    head.style.cssText = 'width:120px;height:140px;position:relative;';
-    head.innerHTML = `
-        <div style="position:absolute;top:0;left:50%;transform:translateX(-50%);width:0;height:0;border-left:60px solid transparent;border-right:60px solid transparent;border-bottom:80px solid #1a3a1a;"></div>
-        <div style="position:absolute;top:65px;left:50%;transform:translateX(-50%);width:100px;height:75px;background:#1a3a1a;border-radius:0 0 50% 50%;"></div>
-        <div style="position:absolute;top:80px;left:50%;transform:translateX(-50%);display:flex;gap:30px;">
-            <div style="width:16px;height:16px;border-radius:50%;background:radial-gradient(circle,#00ff00 30%,#00aa00 70%,#005500 100%);box-shadow:0 0 15px #00ff00,0 0 30px #00ff00;animation:flatwoodsGlow 2.5s ease-in-out infinite;"></div>
-            <div style="width:16px;height:16px;border-radius:50%;background:radial-gradient(circle,#00ff00 30%,#00aa00 70%,#005500 100%);box-shadow:0 0 15px #00ff00,0 0 30px #00ff00;animation:flatwoodsGlow 2.5s ease-in-out infinite;"></div>
-        </div>
+    creature.innerHTML = `
+        <svg viewBox="0 0 400 420" width="420" height="441" xmlns="http://www.w3.org/2000/svg" style="filter:drop-shadow(0 0 40px rgba(0,80,0,0.4));">
+            <defs>
+                <radialGradient id="fmEyeGlow" cx="50%" cy="50%" r="50%">
+                    <stop offset="30%" stop-color="#cc0000"/>
+                    <stop offset="70%" stop-color="#880000"/>
+                    <stop offset="100%" stop-color="#440000"/>
+                </radialGradient>
+                <linearGradient id="fmBodyFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#1a3a1a"/>
+                    <stop offset="100%" stop-color="#0d1f0d"/>
+                </linearGradient>
+            </defs>
+            <!-- Filled hood+body shape -->
+            <path d="M76.5,413.7 L54.3,396.0 L35.3,374.8 L19.9,350.5 L8.8,323.9 L2.0,295.8 L0.0,266.8 L2.7,238.0 L10.0,210.0 L21.7,183.6 L37.6,159.7 L57.1,138.9 L89.2,113.4 L123.2,90.5 L147.6,73.3 L169.0,52.0 L186.6,27.3 L200.0,0.0 L213.4,27.3 L231.0,52.0 L252.4,73.3 L276.8,90.5 L310.8,113.4 L342.9,138.9 L362.4,159.7 L378.3,183.6 L390.0,210.0 L397.3,238.0 L400.0,266.8 L398.0,295.8 L391.2,323.9 L380.1,350.5 L364.7,374.8 L345.7,396.0 L323.5,413.7 L362.5,416.5 L281.3,411.5 L200.0,409.8 L118.7,411.5 L37.5,416.5 Z" fill="url(#fmBodyFill)" stroke="none" opacity="0.95"/>
+            <!-- Bottom baseline -->
+            <path d="M37.5,416.5 L118.7,411.5 L200.0,409.8 L281.3,411.5 L362.5,416.5" fill="none" stroke="#1a3a1a" stroke-width="2"/>
+            <!-- Head circle -->
+            <path d="M305.7,273.0 L303.1,248.7 L295.2,225.5 L282.7,204.7 L265.9,187.4 L245.9,174.4 L223.5,166.3 L200.0,163.5 L176.5,166.3 L154.1,174.4 L134.1,187.4 L117.3,204.7 L104.8,225.5 L96.9,248.7 L94.3,273.0 L96.9,297.4 L104.8,320.6 L117.3,341.3 L134.1,358.7 L154.1,371.7 L176.5,379.8 L200.0,382.6 L223.5,379.8 L245.9,371.7 L265.9,358.7 L282.7,341.3 L295.2,320.6 L303.1,297.4 L305.7,273.0 Z" fill="#0d1f0d" stroke="#1a3a1a" stroke-width="2"/>
+            <!-- Left eye -->
+            <circle cx="154" cy="273" r="29" fill="url(#fmEyeGlow)" style="filter:drop-shadow(0 0 15px #cc0000) drop-shadow(0 0 30px #880000);animation:flatwoodsGlow 2.5s ease-in-out infinite;"/>
+            <!-- Right eye -->
+            <circle cx="246" cy="273" r="29" fill="url(#fmEyeGlow)" style="filter:drop-shadow(0 0 15px #cc0000) drop-shadow(0 0 30px #880000);animation:flatwoodsGlow 2.5s ease-in-out infinite;"/>
+            <!-- Hood edge highlight -->
+            <path d="M76.5,413.7 L54.3,396.0 L35.3,374.8 L19.9,350.5 L8.8,323.9 L2.0,295.8 L0.0,266.8 L2.7,238.0 L10.0,210.0 L21.7,183.6 L37.6,159.7 L57.1,138.9 L89.2,113.4 L123.2,90.5 L147.6,73.3 L169.0,52.0 L186.6,27.3 L200.0,0.0 L213.4,27.3 L231.0,52.0 L252.4,73.3 L276.8,90.5 L310.8,113.4 L342.9,138.9 L362.4,159.7 L378.3,183.6 L390.0,210.0 L397.3,238.0 L400.0,266.8 L398.0,295.8 L391.2,323.9 L380.1,350.5 L364.7,374.8 L345.7,396.0 L323.5,413.7" fill="none" stroke="#00aa00" stroke-width="1" opacity="0.15"/>
+        </svg>
     `;
-    creature.appendChild(head);
-
-    // Body — dark draped shape
-    const body = document.createElement('div');
-    body.style.cssText = 'width:80px;height:180px;background:linear-gradient(to bottom, #1a3a1a 0%, #0d1f0d 100%);border-radius:10px 10px 40px 40px;margin-top:-10px;' +
-        'box-shadow:0 0 40px rgba(0,80,0,0.3);';
-    creature.appendChild(body);
-
-    // Claws/arms
-    const arms = document.createElement('div');
-    arms.style.cssText = 'position:absolute;top:150px;left:50%;transform:translateX(-50%);width:160px;display:flex;justify-content:space-between;';
-    arms.innerHTML = `
-        <div style="width:30px;height:60px;background:#1a3a1a;border-radius:50% 0 0 50%;transform:rotate(15deg);"></div>
-        <div style="width:30px;height:60px;background:#1a3a1a;border-radius:0 50% 50% 0;transform:rotate(-15deg);"></div>
-    `;
-    creature.appendChild(arms);
     overlay.appendChild(creature);
 
-    // History text
+    // History text — positioned at top, above the creature
     const textBlock = document.createElement('div');
-    textBlock.style.cssText = 'position:relative;z-index:2;max-width:520px;text-align:center;opacity:0;transition:opacity 2s ease 1s;padding:20px;border:1px solid rgba(0,180,0,0.3);border-radius:6px;margin-bottom:60px;';
+    textBlock.style.cssText = 'position:absolute;top:30px;left:50%;transform:translateX(-50%);z-index:3;max-width:520px;text-align:center;opacity:0;transition:opacity 2s ease 1s;padding:20px;border:1px solid rgba(0,180,0,0.3);border-radius:6px;background:#000;';
     textBlock.innerHTML =
         '<div style="color:#00cc44;font-size:12pt;font-weight:600;letter-spacing:3px;margin-bottom:20px;text-transform:uppercase;">September 12, 1952</div>' +
         '<div style="color:#44ee66;font-size:11pt;line-height:1.8;margin-bottom:20px;">' +
@@ -6784,7 +7079,7 @@ function checkFlatwoodsDay(force) {
     const glowStyle = document.createElement('style');
     glowStyle.id = 'flatwoods-glow-style';
     glowStyle.textContent = `
-        @keyframes flatwoodsGlow { 0%,100% { box-shadow: 0 0 15px #00ff00, 0 0 30px #00ff00; } 50% { box-shadow: 0 0 25px #00ff00, 0 0 50px #00ff00, 0 0 80px rgba(0,255,0,0.5); } }
+        @keyframes flatwoodsGlow { 0%,100% { box-shadow: 0 0 15px #cc0000, 0 0 30px #880000; } 50% { box-shadow: 0 0 25px #cc0000, 0 0 50px #880000, 0 0 80px rgba(200,0,0,0.5); } }
         @keyframes orbDescend { 0% { top: -60px; } 100% { top: 35%; } }
         @keyframes orbFade { 0% { opacity: 1; } 100% { opacity: 0; transform: translateX(-50%) scale(3); } }
     `;
@@ -6800,7 +7095,7 @@ function checkFlatwoodsDay(force) {
             orb.style.opacity = '1';
             textBlock.style.opacity = '1';
             creature.style.opacity = '1';
-            creature.style.bottom = '50px';
+            creature.style.bottom = '-60px';
         });
     });
 
@@ -6817,10 +7112,11 @@ function checkFlatwoodsDay(force) {
         }, 3200);
     }, 2500);
 
-    // Creature slowly fades out after appearing
+    // Creature fades and sinks out of frame
     setTimeout(function() {
-        creature.style.transition = 'opacity 10s ease';
+        creature.style.transition = 'opacity 5s ease, bottom 12s ease';
         creature.style.opacity = '0';
+        creature.style.bottom = '-500px';
     }, 16000);
 
     // Click to dismiss
@@ -7037,6 +7333,7 @@ window.toggleHubPanel = function() {
         hubPanelActive = true;
         updateBridgeSizes();
     }
+    updateUrlHash();
 };
 
 // ==================== SHAREABLE LINK SYSTEM ====================
@@ -7123,7 +7420,7 @@ function generateShareableLinkUrl() {
     if (!ccs.satisfactory) catParts.push('s0');
     if (!ccs.completed) catParts.push('p0');
     if (ccs.na) catParts.push('n1');
-    if (ccs.hubdata) catParts.push('h1');
+    // hubdata isolation removed — HUB Data button now cycles hubDataMode (encoded as 'hub' param)
     if (!ccs.total) catParts.push('t0');
     if (catParts.length > 0) state.cat = catParts.join(',');
 
@@ -7157,6 +7454,15 @@ function generateShareableLink() {
         prompt('Copy this shareable link:', url);
     });
     return url;
+}
+
+function updateUrlHash() {
+    if (!_urlUpdateEnabled) return;
+    clearTimeout(_urlUpdateTimer);
+    _urlUpdateTimer = setTimeout(() => {
+        const url = generateShareableLinkUrl();
+        history.replaceState(null, '', url);
+    }, 500);
 }
 
 function showShareLinkToast(message) {
@@ -7316,7 +7622,7 @@ function showSharePopover(anchorEl, config) {
 
     const popover = document.createElement('div');
     popover.id = 'share-popover';
-    popover.style.cssText = 'position:fixed;z-index:100000;background:#003B5C;border:2px solid #FFB81C;border-radius:8px;padding:14px 16px;box-shadow:0 8px 24px rgba(0,0,0,0.5);min-width:220px;max-width:320px;font-family:Aptos,Roboto,sans-serif;';
+    popover.style.cssText = 'position:fixed;z-index:100000;background:#003B5C;border:1px solid #FFB81C;border-radius:8px;padding:14px 16px;box-shadow:0 8px 24px rgba(0,0,0,0.5);min-width:220px;max-width:320px;font-family:Aptos,Roboto,sans-serif;';
 
     let whatHtml = '';
     const popoverId = 'share-popover';
@@ -7609,6 +7915,21 @@ function restoreFromUrl() {
         // HUB data mode
         if (p.has('hub')) {
             hubDataMode = parseInt(p.get('hub'));
+            projectRingsVisible = hubDataMode === 1;
+            if (hubDataMode === 1) {
+                // Rings mode: show rings after data loads
+                setTimeout(() => { updateProjectRings(); styleCRHubButton(); }, 500);
+            } else if (hubDataMode === 2) {
+                // Theme mode: update bridge sizes after data loads
+                setTimeout(() => { updateBridgeSizes(); applyCountCategoryFilter(); styleCRHubButton(); }, 500);
+            }
+            // Update standalone button if visible (tour)
+            const hubBtn = document.getElementById('projectToggle');
+            if (hubBtn) {
+                hubBtn.classList.remove('active', 'theme');
+                if (hubDataMode === 1) hubBtn.classList.add('active');
+                else if (hubDataMode === 2) hubBtn.classList.add('theme');
+            }
             if (p.get('hf') === '1') {
                 hubFilterState.active = true;
                 if (p.has('hs')) hubFilterState.statuses = p.get('hs').split(',');
@@ -7625,7 +7946,7 @@ function restoreFromUrl() {
                 if (tok === 's0') countCategoryState.satisfactory = false;
                 if (tok === 'p0') countCategoryState.completed = false;
                 if (tok === 'n1') countCategoryState.na = true;
-                if (tok === 'h1') countCategoryState.hubdata = true;
+                // h1 (hubdata isolation) removed — HUB Data now uses hub= param for mode cycling
                 if (tok === 't0') countCategoryState.total = false;
             });
         }
