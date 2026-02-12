@@ -50,6 +50,7 @@
             border-radius: 8px; border: 1px solid var(--wvdoh-yellow);
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
             backdrop-filter: blur(10px);
+            width: 280px; box-sizing: border-box;
         }
         
         .header-overlay {
@@ -184,7 +185,73 @@
         .hub-panel .folder-tab:hover {
             background: #388E3C;
         }
-        
+
+        /* Reports Panel - Red tab (matches AF), wider for detail content */
+        .reports-panel {
+            position: fixed; left: -384px; top: 0; bottom: 0;
+            z-index: 9996;
+            background: #376a81;
+            border: 1px solid var(--wvdoh-yellow); border-left: none;
+            border-radius: 0 12px 12px 0; width: 384px;
+            box-shadow: 4px 0 16px rgba(0, 0, 0, 0.4);
+            display: flex; flex-direction: column;
+            transition: left 0.3s ease;
+        }
+        .reports-panel.open { left: 0; }
+        .reports-panel.ontop { z-index: 10003; }
+        .reports-panel .folder-tab {
+            background: #8B0000;
+            top: calc(50% + 330px);
+        }
+        .reports-panel .folder-tab:hover {
+            background: #A52A2A;
+        }
+        .reports-panel .panel-body {
+            flex: 1; overflow-y: auto; padding: 12px 16px;
+        }
+        .reports-panel .panel-body::-webkit-scrollbar { width: 8px; }
+        .reports-panel .panel-body::-webkit-scrollbar-track { background: var(--wvdoh-blue); }
+        .reports-panel .panel-body::-webkit-scrollbar-thumb { background: var(--wvdoh-yellow); border-radius: 4px; }
+        .reports-panel .panel-body::-webkit-scrollbar-thumb:hover { background: #ffd700; }
+
+        .report-section {
+            margin-bottom: 6px;
+            border: 1px solid rgba(255,184,28,0.2);
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .report-section-header {
+            background: rgba(0,59,92,0.6);
+            padding: 5px 8px;
+            color: var(--wvdoh-yellow);
+            font-size: 8pt;
+            font-weight: 600;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .report-section-header:hover {
+            background: rgba(0,59,92,0.85);
+        }
+        .report-section-body {
+            padding: 6px 8px;
+            background: rgba(0,40,85,0.2);
+        }
+        .report-section-body.collapsed {
+            display: none;
+        }
+        .report-section-body .narrative-section {
+            margin-bottom: 8px; padding-bottom: 8px;
+        }
+        .report-section-body .narrative-section h4 {
+            font-size: 8pt; margin-bottom: 3px;
+        }
+        .report-section-body .narrative-section p {
+            font-size: 7pt; line-height: 1.4;
+        }
+
         /* NHS Filter Buttons */
         .nhs-btn {
             flex: 1;
@@ -287,7 +354,7 @@
         .inspection-options-section {
             margin-bottom: 20px;
             padding: 12px;
-            background: rgba(0, 40, 85, 0.6);
+            background: rgba(0,59,92,0.6);
             border-radius: 6px;
             border: 1px solid var(--wvdoh-yellow);
         }
@@ -354,9 +421,9 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            z-index: 9999;
+            z-index: 998;
             backdrop-filter: blur(10px);
-            transition: background 0.3s ease;
+            transition: background 0.3s ease, padding-left 0.3s ease;
         }
         /* Red status bar when Attributes Filter active */
         .status-bar.attributes-active {
@@ -445,18 +512,113 @@
             margin-right: 8px; border: 1px solid #fff;
         }
         
-        /* Count Report Box */
+        /* Count Report Box — fixed bottom-right */
         .count-report {
-            position: absolute;
-            top: 145px;
-            left: 50%;
-            transform: translateX(-50%);
+            position: fixed;
+            bottom: 50px;
+            right: 20px;
             z-index: 1001;
             background: #376a81;
             border: 1px solid var(--wvdoh-yellow);
             border-radius: 8px;
-            width: 240px;
+            width: 280px;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        }
+
+        /* District Filter — tab + panel slide together as one unit */
+        .cr-district-slideout {
+            position: absolute;
+            right: 100%;
+            top: 50%;
+            height: 85%;
+            display: flex;
+            flex-direction: row;
+            /* closed: content (80px) hides behind CR, tab (24px) visible at CR edge */
+            transform: translateY(-50%) translateX(80px);
+            transition: transform 0.3s ease;
+        }
+        .cr-district-slideout.open {
+            /* open: everything slides left, content visible between tab and CR */
+            transform: translateY(-50%) translateX(0);
+        }
+        .cr-district-tab {
+            width: 24px;
+            height: 100%;
+            background: #074A5C;
+            border: 1px solid var(--wvdoh-yellow);
+            border-right: none;
+            border-radius: 6px 0 0 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: -2px 0 8px rgba(0, 0, 0, 0.3);
+            transition: all 0.2s;
+            flex-shrink: 0;
+            animation: df-nudge 15s ease-in-out 4s infinite;
+        }
+        .cr-district-tab:hover {
+            background: #0E7490;
+        }
+        @keyframes df-nudge {
+            0%, 8%, 100% { transform: translateX(0); }
+            2% { transform: translateX(-6px); }
+            4% { transform: translateX(-2px); }
+            6% { transform: translateX(-5px); }
+        }
+        .cr-district-tab-text {
+            writing-mode: vertical-rl;
+            transform: rotate(180deg);
+            font-family: 'Aptos', 'Roboto', 'Segoe UI', sans-serif;
+            font-size: 7pt;
+            font-weight: 600;
+            color: #fff;
+            white-space: nowrap;
+            user-select: none;
+            letter-spacing: 0.3px;
+        }
+        .cr-district-content {
+            width: 80px;
+            height: 100%;
+            background: rgba(0, 59, 92, 0.4);
+            border: 1px solid var(--wvdoh-yellow);
+            border-right: none;
+            border-left: none;
+            backdrop-filter: blur(10px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 6px 4px;
+            box-sizing: border-box;
+        }
+        .cr-district-item {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2px 4px;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.15s;
+            border: 1px solid transparent;
+            font-size: 8pt;
+            margin-bottom: 0;
+            width: 100%;
+            gap: 4px;
+        }
+        .cr-district-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 184, 28, 0.4);
+        }
+        .cr-district-item.inactive {
+            opacity: 0.35;
+        }
+        .cr-district-color {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 1px solid rgba(255,255,255,0.5);
+            flex-shrink: 0;
         }
         
         .debug-panel {
@@ -1108,6 +1270,9 @@
             font-size: 11pt;
             white-space: nowrap;
         }
+        #category-table-popup .info-content {
+            padding-top: 0;
+        }
         #category-table-popup .info-content table {
             width: 100%;
             table-layout: fixed;
@@ -1160,6 +1325,9 @@
     </div>
     
     <div id="map"></div>
+    <div id="map-watermark" style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:500px; height:500px; pointer-events:none; z-index:399; opacity:0.04;">
+        <img src="wvdot-logo.png" alt="" style="width:100%; height:100%; object-fit:contain;">
+    </div>
     
     <div class="evaluation-panel" id="evaluationPanel">
         <div class="folder-tab" onclick="toggleEvaluationPanel()" data-tip="The Condition Filter panel allows you to weight bridge components — Deck, Superstructure, Substructure, Bearings, and Joints. Drag a slider higher to highlight bridges with worse ratings for that component.">
@@ -1172,9 +1340,9 @@
             <div style="display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 6px;">
                 <a href="https://docs.google.com/document/d/1l2MDlr4IAMorvgPfq9pRG9IYsRgGcxOb/edit?usp=sharing&ouid=112943824375355142692&rtpof=true&sd=true" target="_blank" style="color: var(--wvdoh-yellow); font-size: 9pt; font-weight: 600; text-decoration: underline; letter-spacing: 0.5px;" data-tip="Opens the SpanBase User Manual in Google Docs">User Manual</a>
                 <span style="color: rgba(255,255,255,0.3);">|</span>
-                <button id="tour-help-btn" onclick="startTour()" data-tip="Take an interactive guided tour of SpanBase features">Tutorial</button>
+                <button id="tour-help-btn" onclick="startTour()" data-tip="Take an interactive guided tour of SpanBase features" data-tip-pos="right">Tutorial</button>
                 <span style="color: rgba(255,255,255,0.3);">|</span>
-                <button id="tooltip-toggle-btn" onclick="toggleUITooltips()" data-tip="Toggle UI tooltips on or off">Tooltips</button>
+                <button id="tooltip-toggle-btn" onclick="toggleUITooltips()" data-tip="Toggle UI tooltips on or off" data-tip-pos="right">Tooltips</button>
             </div>
             <div class="section-switcher">
                 <button class="section-btn maintenance active" onclick="switchSection('maintenance')" data-tip="Sliders for Deck, Superstructure, Substructure, Bearings, and Joints. Drag a slider higher to highlight bridges with worse ratings for that component.">Maintenance</button>
@@ -1214,14 +1382,17 @@
                         <label class="checkbox-label"><input type="checkbox" class="month-checkbox" value="12"> Dec</label>
                     </div>
                 </div>
+                <div style="margin-top:12px; text-align:center;">
+                    <button onclick="openReFromInspectionTab();" style="background:rgba(0,59,92,0.6); border:1px solid var(--wvdoh-yellow); color:var(--wvdoh-yellow); padding:6px 16px; border-radius:4px; cursor:pointer; font-size:8pt; font-weight:600; letter-spacing:0.5px;" data-tip="Open the Report Explorer in Inspection Mode to browse bridges by inspection due-date status." onmouseover="this.style.background='rgba(0,59,92,0.9)'" onmouseout="this.style.background='rgba(0,59,92,0.6)'">Open Report Explorer</button>
+                </div>
             </div>
-            
+
             <div id="maintenanceSection" class="section-content active">
                 <p class="panel-instructions">
                     Adjust sliders to weight bridge components. Higher values emphasize worse conditions. Missing ratings (N/A) are excluded from calculations.
                 </p>
                 <div id="eval-sliders-wrapper">
-                <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 15px;">
+                <div style="background: rgba(0,59,92,0.6); padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 15px;">
                 <div class="slider-group" data-tip="Weight the bridge deck rating (riding surface). Higher = more emphasis on poor decks.">
                 <label>Deck</label>
                 <div class="slider-container">
@@ -1259,7 +1430,7 @@
             </div>
             </div>
             
-            <div class="slider-group" style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow);" data-tip="An overall bridge health score from 0 (worst) to 100 (best). The mode button toggles the direction: less than or equal to shows bridges at or below your threshold, greater than or equal to shows bridges at or above it.">
+            <div class="slider-group" style="background: rgba(0,59,92,0.6); padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow);" data-tip="An overall bridge health score from 0 (worst) to 100 (best). The mode button toggles the direction: less than or equal to shows bridges at or below your threshold, greater than or equal to shows bridges at or above it.">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <label style="margin: 0;">Calc. Sufficiency</label>
                     <button id="sufficiency-mode-toggle" onclick="toggleSufficiencyMode()" style="padding: 4px 10px; font-size: 8pt; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--wvdoh-yellow); border-radius: 3px; cursor: pointer; color: var(--wvdoh-yellow); font-weight: 600;" data-tip="Toggle between less than or equal to and greater than or equal to your threshold">≤ Mode</button>
@@ -1272,18 +1443,16 @@
             </div><!-- /eval-sliders-wrapper -->
             </div>
 
-            <div style="margin-top: 12px; text-align: center;">
-                <button onclick="openCfShare(this)" style="background: rgba(255,184,28,0.15); border: 1px solid var(--wvdoh-yellow); color: var(--wvdoh-yellow); padding: 4px 14px; border-radius: 4px; cursor: pointer; font-size: 9pt; font-weight: 600;" data-tip="Share the current map view and filter settings via link, email, or QR code">Share</button>
-            </div>
-            <!-- Reset Button -->
-            <div style="margin-top: 8px; text-align: center;">
-                <button onclick="resetCurrentTab()" style="padding: 8px 20px; font-size: 10pt; background: var(--wvdoh-yellow); border: none; border-radius: 4px; cursor: pointer; font-weight: 600; color: var(--wvdoh-blue);" data-tip="Reset all condition sliders to default. You can also press Esc.">Reset</button>
+            <div style="padding: 8px 16px; display:flex; gap:8px; justify-content:center;">
+                <button onclick="openReFromInspectionTab();" style="flex:1; padding:6px 0; background:rgba(0,59,92,0.6); border:1px solid var(--wvdoh-yellow); color:var(--wvdoh-yellow); border-radius:4px; cursor:pointer; font-size:8pt; font-weight:600; letter-spacing:0.5px;" data-tip="Open the Report Explorer to browse bridge details by category." onmouseover="this.style.background='rgba(0,59,92,0.9)'" onmouseout="this.style.background='rgba(0,59,92,0.6)'">Explorer</button>
+                <button onclick="openCfShare(this)" style="flex:1; padding:6px 0; background:rgba(0,59,92,0.6); border:1px solid var(--wvdoh-yellow); color:var(--wvdoh-yellow); border-radius:4px; cursor:pointer; font-size:8pt; font-weight:600; letter-spacing:0.5px;" data-tip="Share the current map view and filter settings via link, email, or QR code" onmouseover="this.style.background='rgba(0,59,92,0.9)'" onmouseout="this.style.background='rgba(0,59,92,0.6)'">Share</button>
+                <button onclick="resetCurrentTab()" style="flex:1; padding:6px 0; background:rgba(0,59,92,0.6); border:1px solid var(--wvdoh-yellow); color:var(--wvdoh-yellow); border-radius:4px; cursor:pointer; font-size:8pt; font-weight:600; letter-spacing:0.5px;" data-tip="Reset all condition sliders to default. You can also press Esc." onmouseover="this.style.background='rgba(0,59,92,0.9)'" onmouseout="this.style.background='rgba(0,59,92,0.6)'">Reset</button>
             </div>
             </div>
             
             <!-- WVDOT Logo (outside scrollable area, stays at bottom) -->
-            <div style="padding: 15px 10px; text-align: center; flex-shrink: 0;" data-tip="OneDOT — Opens the WVDOT Highways Maintenance page">
-                <a href="https://transportation.wv.gov/highways/maintenance/Pages/default.aspx" target="_blank"><img src="wvdot-logo.png" alt="WVDOT Logo" style="width: calc(50% - 20px); max-width: 175px; height: auto; display: block; margin: 0 auto; cursor: pointer;"></a>
+            <div style="padding: 10px 10px; text-align: center; flex-shrink: 0;" data-tip="OneDOT — Opens the WVDOT Highways Maintenance page">
+                <a href="https://transportation.wv.gov/highways/maintenance/Pages/default.aspx" target="_blank"><img src="wvdot-logo.png" alt="WVDOT Logo" style="width: calc(40% - 20px); max-width: 100px; height: auto; display: block; margin: 0 auto; cursor: pointer; opacity: 0.7;"></a>
             </div>
         </div>
     </div>
@@ -1297,11 +1466,8 @@
             <h3>Attributes Filter</h3>
         </div>
         <div class="panel-body" style="padding-top: 6px;">
-            <div style="text-align: center; margin-bottom: 6px;">
-                <button onclick="openAfShare(this)" style="background: rgba(255,184,28,0.15); border: 1px solid var(--wvdoh-yellow); color: var(--wvdoh-yellow); padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 9pt; font-weight: 600;" data-tip="Share the current map view and filter settings via link, email, or QR code">Share</button>
-            </div>
             <!-- ROUTE/SUBROUTE SEARCH -->
-            <div id="route-search-box" style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;" data-tip="Filter bridges by route number (e.g., 79, I-79, US-19) and optional subroute">
+            <div id="route-search-box" style="background: rgba(0,59,92,0.6); padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;" data-tip="Filter bridges by route number (e.g., 79, I-79, US-19) and optional subroute">
                 <h4 class="section-title">Route Search</h4>
                 <div style="margin-bottom: 10px;">
                     <label class="slider-label" style="margin-bottom: 5px; display: block; font-size: 10pt;">Route</label>
@@ -1316,7 +1482,7 @@
             </div>
             
             <!-- ADT SLIDER -->
-            <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;" data-tip="Average Daily Traffic — the number of vehicles crossing per day. The mode button toggles between less than or equal to and greater than or equal to your threshold.">
+            <div style="background: rgba(0,59,92,0.6); padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;" data-tip="Average Daily Traffic — the number of vehicles crossing per day. The mode button toggles between less than or equal to and greater than or equal to your threshold.">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <h4 class="section-title" style="margin: 0;">ADT</h4>
                     <button id="adt-mode-toggle" onclick="toggleAdtMode()" style="padding: 4px 10px; font-size: 8pt; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--wvdoh-yellow); border-radius: 3px; cursor: pointer; color: var(--wvdoh-yellow); font-weight: 600;" data-tip="Toggle between less than or equal to and greater than or equal to your threshold">≤ Mode</button>
@@ -1332,7 +1498,7 @@
                 </div>
             </div>
             <!-- NHS FILTER -->
-            <div style="background: #003b5c; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;" data-tip="Filter by National Highway System designation — federally important routes carry higher funding priority">
+            <div style="background: rgba(0,59,92,0.6); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;" data-tip="Filter by National Highway System designation — federally important routes carry higher funding priority">
                 <h4 class="section-title" style="margin-bottom: 6px; text-align: center;">National Highway System</h4>
                 <div class="nhs-filter" style="display: flex; gap: 8px; margin: 8px 0; justify-content: center;">
                     <button class="nhs-btn" id="nhs-yes" onclick="setNhsFilter('yes')" style="flex: 0 0 auto; padding: 6px 16px;">Yes</button>
@@ -1342,7 +1508,7 @@
             </div>
             
             <!-- AGE SLIDER -->
-            <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;" data-tip="Bridge age in years since year built. The mode button toggles between less than or equal to and greater than or equal to your threshold.">
+            <div style="background: rgba(0,59,92,0.6); padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;" data-tip="Bridge age in years since year built. The mode button toggles between less than or equal to and greater than or equal to your threshold.">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <label style="margin: 0; color: #fff; font-size: 10pt; font-weight: 600;">Bridge Age</label>
                     <button id="age-mode-toggle" onclick="toggleAgeMode()" style="padding: 4px 10px; font-size: 8pt; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--wvdoh-yellow); border-radius: 3px; cursor: pointer; color: var(--wvdoh-yellow); font-weight: 600;" data-tip="Toggle between less than or equal to and greater than or equal to your threshold">≤ Mode</button>
@@ -1356,7 +1522,7 @@
             </div>
             
             <!-- DIMENSIONS (Length, Width, Area) -->
-            <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;" data-tip="Filter by physical dimensions — Length, Width (out-to-out), and Area. Each slider has a mode toggle for less than or equal to or greater than or equal to. You can use any 2 of the 3 sliders at a time.">
+            <div style="background: rgba(0,59,92,0.6); padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;" data-tip="Filter by physical dimensions — Length, Width (out-to-out), and Area. Each slider has a mode toggle for less than or equal to or greater than or equal to. You can use any 2 of the 3 sliders at a time.">
                 <h4 class="section-title" style="text-align: center; text-transform: uppercase; color: var(--wvdoh-yellow);">Dimensions</h4>
                 <!-- Length slider -->
                 <div style="margin-bottom: 10px;">
@@ -1401,7 +1567,7 @@
 
             <!-- ON BRIDGE / UNDER BRIDGE SIDE BY SIDE -->
             <div style="display: flex; gap: 8px; margin-bottom: 10px;">
-                <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); flex: 1;" data-tip="What travels ON the bridge — uses AND logic: checking multiple narrows to bridges carrying all selected types">
+                <div style="background: rgba(0,59,92,0.6); padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); flex: 1;" data-tip="What travels ON the bridge — uses AND logic: checking multiple narrows to bridges carrying all selected types">
                     <h4 class="section-title">On Bridge</h4>
                     <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="1,4,5"> Highway</label>
                     <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="2,4"> Railroad</label>
@@ -1410,7 +1576,7 @@
                     <label class="checkbox-label"><input type="checkbox" class="on-bridge-cb" value="0"> Other</label>
                     <label class="checkbox-label"><input type="checkbox" id="attr-utilities"> Utilities</label>
                 </div>
-                <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); flex: 1;" data-tip="What passes UNDER the bridge — uses AND logic: checking multiple narrows to bridges spanning all selected types">
+                <div style="background: rgba(0,59,92,0.6); padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); flex: 1;" data-tip="What passes UNDER the bridge — uses AND logic: checking multiple narrows to bridges spanning all selected types">
                     <h4 class="section-title">Under Bridge</h4>
                     <label class="checkbox-label"><input type="checkbox" class="under-bridge-cb" value="5,6,7,8"> Waterway</label>
                     <label class="checkbox-label"><input type="checkbox" class="under-bridge-cb" value="1,4,6,8"> Highway</label>
@@ -1420,7 +1586,7 @@
             </div>
 
             <!-- BRIDGE TYPE -->
-            <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;" data-tip="Filter by structural type code. MULTI mode: check several to combine. SOLO mode: radio-button, one at a time.">
+            <div style="background: rgba(0,59,92,0.6); padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;" data-tip="Filter by structural type code. MULTI mode: check several to combine. SOLO mode: radio-button, one at a time.">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <div style="flex: 1; text-align: left;">
                         <button id="bridge-type-mode-toggle" onclick="toggleBridgeTypeMode()" style="padding: 4px 8px; font-size: 7pt; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--wvdoh-yellow); border-radius: 3px; cursor: pointer; color: var(--wvdoh-yellow); font-weight: 600; white-space: nowrap;">SOLO</button>
@@ -1437,19 +1603,20 @@
             
             
             <!-- SHOW N/A TOGGLE -->
-            <div style="background: #003b5c; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;" data-tip="When checked, shows only bridges that have missing or N/A values for currently active attribute filters">
+            <div style="background: rgba(0,59,92,0.6); padding: 6px 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;" data-tip="When checked, shows only bridges that have missing or N/A values for currently active attribute filters">
                 <label class="checkbox-label" style="display: flex; align-items: center; justify-content: center;">
                     <input type="checkbox" id="show-na-bridges" style="margin-right: 8px;">
                     <span style="color: #fff; font-weight: 600;">Isolate Missing Data</span>
                 </label>
             </div>
             
-            <!-- RESET BUTTON -->
-            <div style="text-align: center; padding-top: 10px;">
-                <button class="reset-btn" onclick="resetAttributesFilter()" style="padding: 10px 24px; background: var(--wvdoh-yellow); color: var(--wvdoh-blue); border: none; border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 11pt; transition: all 0.2s;" data-tip="Reset all attribute filters to default. You can also press Esc.">
-                    Reset Filters
-                </button>
-            </div>
+        </div>
+        <div style="padding: 8px 16px; display:flex; gap:8px; justify-content:center; flex-shrink: 0; border-top: 1px solid rgba(255,255,255,0.1);">
+            <button onclick="openAfShare(this)" style="flex:1; padding:6px 0; background:rgba(0,59,92,0.6); border:1px solid var(--wvdoh-yellow); color:var(--wvdoh-yellow); border-radius:4px; cursor:pointer; font-size:8pt; font-weight:600; letter-spacing:0.5px;" data-tip="Share the current map view and filter settings via link, email, or QR code" onmouseover="this.style.background='rgba(0,59,92,0.9)'" onmouseout="this.style.background='rgba(0,59,92,0.6)'">Share</button>
+            <button onclick="resetAttributesFilter()" style="flex:1; padding:6px 0; background:rgba(0,59,92,0.6); border:1px solid var(--wvdoh-yellow); color:var(--wvdoh-yellow); border-radius:4px; cursor:pointer; font-size:8pt; font-weight:600; letter-spacing:0.5px;" data-tip="Reset all attribute filters to default. You can also press Esc." onmouseover="this.style.background='rgba(0,59,92,0.9)'" onmouseout="this.style.background='rgba(0,59,92,0.6)'">Reset</button>
+        </div>
+        <div style="padding: 10px 10px; text-align: center; flex-shrink: 0;" data-tip="OneDOT — Opens the WVDOT Highways Maintenance page">
+            <a href="https://transportation.wv.gov/highways/maintenance/Pages/default.aspx" target="_blank"><img src="wvdot-logo.png" alt="WVDOT Logo" style="width: calc(40% - 20px); max-width: 100px; height: auto; display: block; margin: 0 auto; cursor: pointer; opacity: 0.7;"></a>
         </div>
     </div>
     
@@ -1463,12 +1630,12 @@
         </div>
         <div class="panel-body">
             <!-- HUB STATUS -->
-            <div style="background: #003b5c; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px; text-align: center;">
+            <div style="background: rgba(0,59,92,0.6); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px; text-align: center;">
                 <span id="hub-match-count" style="color: var(--wvdoh-yellow); font-weight: 600; font-size: 10pt;">Loading...</span>
             </div>
 
             <!-- PROJECT STATUS FILTER -->
-            <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
+            <div style="background: rgba(0,59,92,0.6); padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
                 <h4 class="section-title" style="text-align: center;">Project Status</h4>
                 <div id="hub-status-checkboxes">
                     <!-- populated dynamically -->
@@ -1476,7 +1643,7 @@
             </div>
 
             <!-- PHASE CODE FILTER -->
-            <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
+            <div style="background: rgba(0,59,92,0.6); padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
                 <h4 class="section-title" style="text-align: center;">Phase</h4>
                 <div id="hub-phase-checkboxes">
                     <!-- populated dynamically -->
@@ -1485,7 +1652,7 @@
 
 
             <!-- FAMILY CODE FILTER -->
-            <div style="background: #003b5c; padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
+            <div style="background: rgba(0,59,92,0.6); padding: 12px; border-radius: 6px; border: 1px solid var(--wvdoh-yellow); margin-bottom: 10px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <div style="flex: 1;"></div>
                     <h4 class="section-title" style="margin: 0; flex: 1; text-align: center;">Family Code</h4>
@@ -1507,32 +1674,91 @@
         </div>
     </div>
 
-    <button id="projectToggle" class="project-toggle" onclick="toggleProjectRings()" style="display: none;" data-tip="Click to cycle through HUB Data modes: Off, Rings around project bridges, and Full highlight. When Rings or Full highlight is active, a special HUB Data button appears in the radial menu for bridges with project data.">HUB DATA</button>
-    <div class="legend" data-tip="Each district has its own color. Click any district name to toggle its bridges on or off. Use the All Off button to hide everything, then selectively enable districts you want to focus on.">
-        <h4>Districts</h4>
-        <div class="legend-item"><div class="legend-color" style="background: #e63946;"></div> District 1</div>
-        <div class="legend-item"><div class="legend-color" style="background: #10B981;"></div> District 2</div>
-        <div class="legend-item"><div class="legend-color" style="background: #fcbf49;"></div> District 3</div>
-        <div class="legend-item"><div class="legend-color" style="background: #06d6a0;"></div> District 4</div>
-        <div class="legend-item"><div class="legend-color" style="background: #118ab2;"></div> District 5</div>
-        <div class="legend-item"><div class="legend-color" style="background: #073b4c;"></div> District 6</div>
-        <div class="legend-item"><div class="legend-color" style="background: #8338ec;"></div> District 7</div>
-        <div class="legend-item"><div class="legend-color" style="background: #ff006e;"></div> District 8</div>
-        <div class="legend-item"><div class="legend-color" style="background: #3a86ff;"></div> District 9</div>
-        <div class="legend-item"><div class="legend-color" style="background: #F59E0B;"></div> District 10</div>
-        
-        <div style="text-align: center; margin-top: 12px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.2);">
-            <button id="toggleAllDistricts" onclick="toggleAllDistricts()" style="padding: 6px 12px; font-size: 9pt; background: var(--wvdoh-yellow); border: none; border-radius: 4px; cursor: pointer; font-weight: 600; color: var(--wvdoh-blue);">All Off</button>
+    <!-- Report Explorer Panel -->
+    <div class="reports-panel" id="reportsPanel">
+        <div class="folder-tab" onclick="toggleReportsPanel()" data-tip="Open the Report Explorer to browse bridge details by category. Use ▲▼ to navigate bridges, ◀▶ to cycle categories.">
+            <div class="folder-tab-text">Report Explorer</div>
+        </div>
+        <div class="panel-header" style="position:relative;">
+            <div style="display:flex; align-items:center; justify-content:center; gap:10px;">
+                <h3 style="margin:0;">Report Explorer</h3>
+            </div>
+            <div style="text-align:center; margin-top:4px;">
+                <button id="re-tour-btn" onclick="startReTour()" style="background:transparent; border:none; color:var(--wvdoh-yellow); font-size:8pt; font-weight:600; cursor:pointer; text-decoration:underline; letter-spacing:0.5px; padding:0;" data-tip="Take a guided tour of the Report Explorer features">Tutorial</button>
+                <span style="color:rgba(255,255,255,0.3); margin:0 6px;">|</span>
+                <button id="re-share-btn" onclick="openReShare(this)" style="background:transparent; border:none; color:var(--wvdoh-yellow); font-size:8pt; font-weight:600; cursor:pointer; text-decoration:underline; letter-spacing:0.5px; padding:0;" data-tip="Share the current Report Explorer view">Share</button>
+            </div>
+        </div>
+        <div class="panel-body" id="reportsPanelBody">
+            <!-- Mode header bar -->
+            <div id="reportModeBar"></div>
+            <!-- Category selector row — centered -->
+            <div id="reportCategoryBar" style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px; justify-content:center;">
+                <!-- Built by buildReportCategoryButtons() -->
+            </div>
+            <!-- Title box with nav arrows, bridge info, and view toggle — built dynamically -->
+            <div id="reportTitleBox">
+                <!-- Populated by renderReportDetail -->
+            </div>
+            <!-- Bridge list table for current category -->
+            <div id="reportBridgeListBox">
+                <!-- Populated by renderReportBridgeList -->
+            </div>
+            <!-- Bridge detail sections -->
+            <div id="reportDetail" style="flex:1;">
+                <!-- Populated dynamically -->
+            </div>
+        </div>
+        <!-- Bottom bar: Tutorial + Share buttons -->
+        <div id="re-bottom-bar" style="padding: 8px 16px; text-align: center; flex-shrink: 0; border-top: 1px solid rgba(255,255,255,0.1); display:flex; gap:8px; justify-content:center;">
+            <button onclick="startReTour()" style="flex:1; padding:6px 0; background:rgba(0,59,92,0.6); border:1px solid var(--wvdoh-yellow); color:var(--wvdoh-yellow); border-radius:4px; cursor:pointer; font-size:8pt; font-weight:600; letter-spacing:0.5px;" onmouseover="this.style.background='rgba(0,59,92,0.9)'" onmouseout="this.style.background='rgba(0,59,92,0.6)'">Tutorial</button>
+            <button id="re-share-bottom" onclick="openReShare(this)" style="flex:1; padding:6px 0; background:rgba(0,59,92,0.6); border:1px solid var(--wvdoh-yellow); color:var(--wvdoh-yellow); border-radius:4px; cursor:pointer; font-size:8pt; font-weight:600; letter-spacing:0.5px;" onmouseover="this.style.background='rgba(0,59,92,0.9)'" onmouseout="this.style.background='rgba(0,59,92,0.6)'">Share</button>
+        </div>
+        <!-- WVDOT Logo anchored to bottom of RE panel (outside scrollable panel-body) -->
+        <div style="padding: 10px 10px; text-align: center; flex-shrink: 0;" data-tip="OneDOT — Opens the WVDOT Highways Maintenance page">
+            <a href="https://transportation.wv.gov/highways/maintenance/Pages/default.aspx" target="_blank"><img src="wvdot-logo.png" alt="WVDOT Logo" style="width: calc(50% - 20px); max-width: 120px; height: auto; display: block; margin: 0 auto; cursor: pointer;"></a>
         </div>
     </div>
+
+    <button id="projectToggle" class="project-toggle" onclick="toggleProjectRings()" style="display: none;" data-tip="Click to cycle through HUB Data modes: Off, Rings around project bridges, and Full highlight. When Rings or Full highlight is active, a special HUB Data button appears in the radial menu for bridges with project data.">HUB DATA</button>
+    <!-- Old legend hidden — districts now live in CR drawer -->
+    <div class="legend" style="display:none;">
+        <div class="legend-item"></div><div class="legend-item"></div><div class="legend-item"></div>
+        <div class="legend-item"></div><div class="legend-item"></div><div class="legend-item"></div>
+        <div class="legend-item"></div><div class="legend-item"></div><div class="legend-item"></div>
+        <div class="legend-item"></div>
+    </div>
     
-    <!-- COUNT REPORT BOX -->
+    <!-- COUNT REPORT BOX — fixed bottom-right with districts drawer -->
     <div class="count-report" id="countReport" style="display: none;">
-        <div style="background: #003b5c; padding: 6px 12px; display: flex; justify-content: space-between; align-items: center; border-radius: 6px 6px 0 0; cursor: default;" id="countReportHeader">
-            <h4 style="margin: 0; color: var(--wvdoh-yellow); font-size: 11pt; text-transform: uppercase; letter-spacing: 1px; font-weight: 700;">Count Report</h4>
-            <button onclick="closeCountReport()" style="background: transparent; color: #fff; border: none; cursor: pointer; font-weight: 700; font-size: 11pt; padding: 0; line-height: 1;">✕</button>
+        <!-- District Filter: tab + content slide together -->
+        <div class="cr-district-slideout" id="crDistrictSlideout">
+            <!-- Tab on left — visible when closed, slides further left when open -->
+            <div class="cr-district-tab" id="crDistrictTab" onclick="toggleCrDistricts()" data-tip="Click to open the District Filter — solo a district by clicking it, click again to show all.">
+                <div class="cr-district-tab-text">District Filter</div>
+            </div>
+            <!-- Content on right — hidden behind CR when closed, visible when open -->
+            <div class="cr-district-content">
+                <div class="cr-district-item" data-district="District 1"><div class="cr-district-color" style="background:#e63946;"></div><span>D1</span></div>
+                <div class="cr-district-item" data-district="District 2"><div class="cr-district-color" style="background:#10B981;"></div><span>D2</span></div>
+                <div class="cr-district-item" data-district="District 3"><div class="cr-district-color" style="background:#fcbf49;"></div><span>D3</span></div>
+                <div class="cr-district-item" data-district="District 4"><div class="cr-district-color" style="background:#06d6a0;"></div><span>D4</span></div>
+                <div class="cr-district-item" data-district="District 5"><div class="cr-district-color" style="background:#118ab2;"></div><span>D5</span></div>
+                <div class="cr-district-item" data-district="District 6"><div class="cr-district-color" style="background:#073b4c;"></div><span>D6</span></div>
+                <div class="cr-district-item" data-district="District 7"><div class="cr-district-color" style="background:#8338ec;"></div><span>D7</span></div>
+                <div class="cr-district-item" data-district="District 8"><div class="cr-district-color" style="background:#ff006e;"></div><span>D8</span></div>
+                <div class="cr-district-item" data-district="District 9"><div class="cr-district-color" style="background:#3a86ff;"></div><span>D9</span></div>
+                <div class="cr-district-item" data-district="District 10"><div class="cr-district-color" style="background:#F59E0B;"></div><span>D10</span></div>
+                <div style="text-align:center; margin-top:3px; padding-top:3px; border-top:1px solid rgba(255,255,255,0.15);">
+                    <button id="toggleAllDistricts" onclick="toggleAllDistricts()" style="padding:2px 8px; font-size:7pt; background:var(--wvdoh-yellow); border:none; border-radius:3px; cursor:pointer; font-weight:600; color:var(--wvdoh-blue);">All Off</button>
+                </div>
+                <div style="text-align:center; margin-top:2px;">
+                    <button onclick="toggleCrDistricts()" style="padding:1px 6px; font-size:7pt; background:transparent; border:1px solid rgba(255,255,255,0.3); border-radius:3px; cursor:pointer; color:rgba(255,255,255,0.6);">Hide</button>
+                </div>
+            </div>
         </div>
-        <div id="countReportBody" style="padding: 6px 10px; border-radius: 0 0 6px 6px;">
+        <!-- CR body — no title bar -->
+        <div id="countReportBody" style="padding: 6px 10px; border-radius: 6px; position:relative; z-index:1; background:#376a81;">
             <!-- Buttons are built dynamically by buildCountReportButtons() -->
         </div>
     </div>
@@ -1545,6 +1771,12 @@
         <button id="attributesResetBtn" onclick="resetAttributesFilter()" style="display: none; margin-left: 20px; padding: 6px 16px; background: var(--wvdoh-yellow); color: var(--wvdoh-blue); border: none; border-radius: 4px; font-weight: 600; cursor: pointer; font-size: 10pt;">Reset Attributes</button>
     </div>
     
+    <!-- RE Status Bar (bottom of screen when Report Explorer is open) -->
+    <div id="re-status-bar" style="display:none; position:fixed; bottom:0; left:0; right:0; height:40px; background:rgba(139,0,0,0.95); border-top:1px solid var(--wvdoh-yellow); display:none; align-items:center; justify-content:center; gap:20px; z-index:998; backdrop-filter:blur(10px); transition:background 0.3s;">
+        <span id="re-status-text" style="color:var(--wvdoh-yellow); font-size:11pt; font-weight:600; letter-spacing:0.5px;"></span>
+        <button onclick="toggleReportsPanel()" style="padding:6px 16px; background:var(--wvdoh-yellow); color:var(--wvdoh-blue); border:none; border-radius:4px; font-weight:600; cursor:pointer; font-size:10pt;">Close Explorer</button>
+    </div>
+
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>

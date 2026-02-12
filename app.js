@@ -33,6 +33,42 @@ let _urlUpdateEnabled = false;
 // CR manual close tracking
 let crManuallyHidden = false;
 
+// Both-mode (dCR) category isolation — independent maint/insp sections
+let bothActiveSection = null;   // 'maint' or 'insp' when a dCR category button is clicked
+let bothActiveCategory = null;  // 'critical', 'emergent', 'satisfactory' when isolated
+
+// Report Mode state
+let reportPanelOpen = false;
+let reportCategory = 'critical';     // selected category filter — default to critical
+let reportBridgeList = [];           // bridges matching current category
+let reportCurrentIndex = 0;          // current bridge index in the list
+let reportHighlightMarker = null;    // temp highlight ring on map
+let reportViewMode = 'maintenance';  // 'maintenance' or 'inspection' — controls section order/defaults
+let reportBarsSet = null;            // Set of BARS in current report list (for quick lookup)
+let reportMapMode = 'panZoom';       // 'panZoom' | 'pan' | 'off' — controls map behavior during RE nav
+let reportZoomFromNav = false;       // flag to distinguish programmatic zoom from user zoom
+let reTourShownThisSession = false;  // only auto-show RE tutorial once per session
+let reTourActive = false;
+let reTourStep = 0;
+
+// RE Condition filter toggles — clicking a rating square filters map bridges
+let reportConditionFilters = {};     // e.g. { deck_rating: '4', substructure_rating: '6' }
+let reportSufficiencyFilter = null;  // target value; shows bridges within ±10
+
+// District bounds (calculated from bridge coordinates)
+const districtBounds = {
+    'District 1': [[37.802, -82.184], [39.013, -80.824]],
+    'District 2': [[37.528, -82.605], [38.586, -81.673]],
+    'District 3': [[38.539, -81.880], [39.460, -80.841]],
+    'District 4': [[39.108, -80.893], [39.720, -79.488]],
+    'District 5': [[38.798, -79.424], [39.693, -77.742]],
+    'District 6': [[39.340, -81.018], [40.621, -80.436]],
+    'District 7': [[38.364, -81.214], [39.294, -79.846]],
+    'District 8': [[38.064, -80.299], [39.237, -79.110]],
+    'District 9': [[37.397, -81.364], [38.522, -80.083]],
+    'District 10': [[37.206, -81.946], [37.969, -80.869]]
+};
+
 // District toggle state - all active by default
 let activeDistricts = {
     'District 1': true,
@@ -142,7 +178,12 @@ async function init() {
         }
 
         // Initialize map with WV bounding box
-        map = L.map('map', { minZoom: 7 });
+        map = L.map('map', {
+            minZoom: 8,
+            maxZoom: 15,
+            maxBounds: [[35.5, -84.5], [42.0, -76.0]],
+            maxBoundsViscosity: 0.8
+        });
 
         // Temporary view until we fit to bridge data
         map.setView([38.9135, -80.1735], 8);
@@ -180,6 +221,20 @@ async function init() {
             updateProjectRings();
             updateDebugPanel();
             closeAllMenus();
+            // Update highlight ring radius to match new point size
+            if (reportHighlightMarker) {
+                reportHighlightMarker.setRadius(getHighlightRingRadius());
+            }
+            // If RE is open and zoom wasn't from navigation, switch to pan-only mode
+            if (reportPanelOpen && !reportZoomFromNav && reportMapMode === 'panZoom') {
+                reportMapMode = 'pan';
+                renderReportTitleBox();
+            }
+            reportZoomFromNav = false;
+            // Re-apply condition lock colors after updateBridgeSizes resets them
+            if (reportPanelOpen) {
+                applyReportCategoryFilter();
+            }
         });
 
         map.on('moveend', updateUrlHash);
@@ -197,6 +252,7 @@ async function init() {
 
         // Show CR with dual sections on load
         updateCountReport();
+    
 
         document.getElementById('loading').style.display = 'none';
         console.log('✓ SpanBase ready');
@@ -275,8 +331,28 @@ function addBridges() {
             if (options.opacity === 0 || options.fillOpacity === 0) {
                 return;
             }
-            // Radial menu only accessible at zoom 9+
-            if (currentZoom < 9) {
+            // At low zoom (district tooltip level), clicking solos/unsolos that district
+            if (currentZoom < 10) {
+                const districtName = bridge.district;
+                if (!districtName) return;
+                const onlyThisActive = activeDistricts[districtName] &&
+                    Object.entries(activeDistricts).filter(([k,v]) => v && k !== districtName).length === 0;
+                const districtItems = document.querySelectorAll('.cr-district-item');
+                if (onlyThisActive) {
+                    Object.keys(activeDistricts).forEach(d => { activeDistricts[d] = true; });
+                    districtItems.forEach(i => i.classList.remove('inactive'));
+                    map.fitBounds(wvBounds, { padding: [30, 30] });
+                } else {
+                    Object.keys(activeDistricts).forEach(d => { activeDistricts[d] = (d === districtName); });
+                    districtItems.forEach(i => {
+                        i.classList.toggle('inactive', i.getAttribute('data-district') !== districtName);
+                    });
+                    const bounds = districtBounds[districtName];
+                    if (bounds) map.fitBounds(bounds, { padding: [30, 30] });
+                }
+                syncToggleAllButton();
+                updateBridgeVisibility();
+                updateUrlHash();
                 return;
             }
             // Disabled during certain tour steps
@@ -293,6 +369,33 @@ function addBridges() {
                 excludeUndoStack.push([bridge.bars_number]);
                 updateBridgeSizes();
                 showBoxFilterIndicator();
+                return;
+            }
+
+            // Report Explorer open: navigate RE to this bridge instead of radial menu
+            if (reportPanelOpen) {
+                let idx = reportBridgeList.findIndex(b => b.bars_number === bridge.bars_number);
+                if (idx < 0) {
+                    // Bridge not in current category — switch to Total
+                    switchReportCategory('total');
+                    idx = reportBridgeList.findIndex(b => b.bars_number === bridge.bars_number);
+                }
+                if (idx >= 0) {
+                    reportCurrentIndex = idx;
+                    renderReportDetail(reportBridgeList[reportCurrentIndex]);
+                    // Place highlight ring at current zoom — no pan/zoom since user clicked on the map
+                    removeReportHighlight();
+                    const b = reportBridgeList[reportCurrentIndex];
+                    if (b && b.latitude && b.longitude) {
+                        reportHighlightMarker = L.circleMarker(
+                            [parseFloat(b.latitude), parseFloat(b.longitude)],
+                            { radius: getHighlightRingRadius(), color: '#000000', weight: 3, fillColor: 'transparent', fillOpacity: 0, className: 'report-highlight-ring' }
+                        ).addTo(map);
+                    }
+                    updateReportNav();
+                    renderReportBridgeList();
+                    applyReportCategoryFilter();
+                }
                 return;
             }
 
@@ -535,6 +638,7 @@ function showRadialMenu(latlng, bridge) {
             <a href="${bridge.bars_hyperlink || '#'}"
                target="_blank" class="menu-title-link" data-tip="Open this bridge record in AssetWise">AssetWise</a>
             <a href="javascript:void(0)" class="menu-title-link" onclick="openRadialShare(this, window._radialBridge)" data-tip="Share this bridge's data via link, email, or QR code">Share</a>
+            <a href="javascript:void(0)" class="menu-title-link" onclick="openBridgeReport(window._radialBridge)" data-tip="Open this bridge in Report Mode — browse all details in a scrollable panel">Report</a>
         </div>
     `;
     document.getElementById('map').appendChild(title);
@@ -598,10 +702,11 @@ function showRadialMenu(latlng, bridge) {
     // Click outside to close (but not on bridges)
     setTimeout(() => {
         const closeListener = function(e) {
-            // Don't close if clicking on menu, title, info panel, or another bridge
-            if (menu.contains(e.target) || 
+            // Don't close if clicking on menu, title, info panel, share popover, or another bridge
+            if (menu.contains(e.target) ||
                 title.contains(e.target) ||
                 e.target.closest('.info-panel') ||
+                e.target.closest('#share-popover') ||
                 e.target.closest('.leaflet-interactive')) {
                 return;
             }
@@ -1555,8 +1660,13 @@ function updateBridgeSizes() {
         marker.bringToFront();
     });
     
-    // Apply count category filter (if condition sliders active)
-    applyCountCategoryFilter();
+    // If a both-mode dCR button is active, re-apply its isolation (overrides above)
+    if (bothActiveSection && bothActiveCategory) {
+        applyBothCategoryFilter();
+    } else {
+        // Apply count category filter (if condition sliders active)
+        applyCountCategoryFilter();
+    }
 
     // Update count report
     updateCountReport();
@@ -1783,6 +1893,7 @@ function createDebugPanel() {
 
     // Track viewport resize
     window.addEventListener('resize', updateDebugDynamic);
+    window.addEventListener('resize', centerStatusBars);
     // positionProjectToggle removed — HUB DATA button now lives in the CR
 
     updateDebugPanel();
@@ -1964,92 +2075,62 @@ function showEasterEggList() {
 
 // District toggle functionality
 function setupDistrictToggles() {
-    // District bounds (calculated from bridge coordinates)
-    const districtBounds = {
-        'District 1': [[37.802, -82.184], [39.013, -80.824]],
-        'District 2': [[37.528, -82.605], [38.586, -81.673]],
-        'District 3': [[38.539, -81.880], [39.460, -80.841]],
-        'District 4': [[39.108, -80.893], [39.720, -79.488]],
-        'District 5': [[38.798, -79.424], [39.693, -77.742]],
-        'District 6': [[39.340, -81.018], [40.621, -80.436]],
-        'District 7': [[38.364, -81.214], [39.294, -79.846]],
-        'District 8': [[38.064, -80.299], [39.237, -79.110]],
-        'District 9': [[37.397, -81.364], [38.522, -80.083]],
-        'District 10': [[37.206, -81.946], [37.969, -80.869]]
-    };
-    
-    const legendItems = document.querySelectorAll('.legend-item');
-    legendItems.forEach((item, index) => {
-        const districtName = `District ${index + 1}`;
+    // Attach click handlers to CR district drawer items
+    const districtItems = document.querySelectorAll('.cr-district-item');
+    districtItems.forEach(item => {
+        const districtName = item.getAttribute('data-district');
         item.addEventListener('click', () => {
-            // Check if ALL districts are currently off (meaning this is the only one on)
-            const onlyThisOneActive = activeDistricts[districtName] && 
+            const onlyThisOneActive = activeDistricts[districtName] &&
                                      Object.entries(activeDistricts).filter(([k,v]) => v && k !== districtName).length === 0;
-            
+
             if (onlyThisOneActive) {
-                // Clicking the only active district - turn all back on and zoom to WV
-                Object.keys(activeDistricts).forEach(district => {
-                    activeDistricts[district] = true;
-                });
-                legendItems.forEach(i => i.classList.remove('inactive'));
+                // Clicking the only active district — turn all back on and zoom to WV
+                Object.keys(activeDistricts).forEach(d => { activeDistricts[d] = true; });
+                districtItems.forEach(i => i.classList.remove('inactive'));
                 map.fitBounds(initialView.bounds, { padding: initialView.padding });
             } else {
-                // Turn off ALL districts except this one
-                Object.keys(activeDistricts).forEach(district => {
-                    activeDistricts[district] = (district === districtName);
+                // Solo this district
+                Object.keys(activeDistricts).forEach(d => {
+                    activeDistricts[d] = (d === districtName);
                 });
-                legendItems.forEach((i, idx) => {
-                    if (idx + 1 === index + 1) {
-                        i.classList.remove('inactive');
-                    } else {
-                        i.classList.add('inactive');
-                    }
+                districtItems.forEach(i => {
+                    i.classList.toggle('inactive', i.getAttribute('data-district') !== districtName);
                 });
-                
-                // Zoom to this district
                 const bounds = districtBounds[districtName];
                 if (bounds) {
                     map.fitBounds(bounds, { padding: [30, 30] });
                 }
             }
-            
-            // Update toggle all button state
-            syncToggleAllButton();
 
-            // Update bridge visibility
+            syncToggleAllButton();
             updateBridgeVisibility();
             updateUrlHash();
         });
     });
+
+    // Also wire up the old hidden legend items so existing code that calls
+    // querySelectorAll('.legend-item') doesn't break
+    const legendItems = document.querySelectorAll('.legend-item');
+    // no-op — they're hidden placeholders now
 }
 
 window.toggleAllDistricts = function() {
-    const legendItems = document.querySelectorAll('.legend-item');
+    const districtItems = document.querySelectorAll('.cr-district-item');
     const toggleBtn = document.getElementById('toggleAllDistricts');
-    
-    // Check if all districts are currently active
+
     const allActive = Object.values(activeDistricts).every(v => v === true);
-    
+
     if (allActive) {
-        // Turn all OFF
-        Object.keys(activeDistricts).forEach(district => {
-            activeDistricts[district] = false;
-        });
-        legendItems.forEach(item => item.classList.add('inactive'));
-        toggleBtn.textContent = 'All On';
+        Object.keys(activeDistricts).forEach(d => { activeDistricts[d] = false; });
+        districtItems.forEach(item => item.classList.add('inactive'));
+        if (toggleBtn) toggleBtn.textContent = 'All On';
     } else {
-        // Turn all ON
-        Object.keys(activeDistricts).forEach(district => {
-            activeDistricts[district] = true;
-        });
-        legendItems.forEach(item => item.classList.remove('inactive'));
-        toggleBtn.textContent = 'All Off';
-        
-        // Zoom back to WV overview
+        Object.keys(activeDistricts).forEach(d => { activeDistricts[d] = true; });
+        districtItems.forEach(item => item.classList.remove('inactive'));
+        if (toggleBtn) toggleBtn.textContent = 'All Off';
         map.fitBounds(initialView.bounds, { padding: initialView.padding });
     }
-    
-    // Update bridge visibility
+
     updateBridgeVisibility();
     updateUrlHash();
 };
@@ -2061,6 +2142,16 @@ function syncToggleAllButton() {
     const allActive = Object.values(activeDistricts).every(v => v === true);
     toggleBtn.textContent = allActive ? 'All Off' : 'All On';
 }
+
+// Toggle the districts drawer on the CR
+window.toggleCrDistricts = function() {
+    const slideout = document.getElementById('crDistrictSlideout');
+    if (!slideout) return;
+    slideout.classList.toggle('open');
+    // Once opened, stop the nudge animation — it's served its purpose
+    const tab = slideout.querySelector('.cr-district-tab');
+    if (tab) tab.style.animation = 'none';
+};
 
 function updateBridgeVisibility() {
     // If inspection filters are active, use inspection update logic
@@ -2239,10 +2330,13 @@ window.switchSection = function(section) {
     
     if (section === 'inspection' && inspectionSection) {
         inspectionSection.classList.add('active');
+        // Auto-activate inspection theme: check all type checkboxes and apply
+        document.querySelectorAll('[id^="insp-"]').forEach(cb => { cb.checked = true; });
+        applyInspectionFilters();
     } else if (section === 'maintenance' && maintenanceSection) {
         maintenanceSection.classList.add('active');
     }
-    
+
     console.log('✓ Switched to:', section);
 };
 
@@ -2393,8 +2487,28 @@ window.resetCurrentTab = function() {
         resetAttributesFilter();
     }
 
-    closeCountReport();
+    // Clear both-mode isolation
+    bothActiveSection = null;
+    bothActiveCategory = null;
+
+    // Close report panel if open
+    if (reportPanelOpen) {
+        const rp = document.getElementById('reportsPanel');
+        if (rp) rp.classList.remove('open', 'ontop');
+        reportPanelOpen = false;
+        removeReportHighlight();
+    }
+
+    // Close district filter slideout if open
+    const dfSlideout = document.getElementById('crDistrictSlideout');
+    if (dfSlideout) dfSlideout.classList.remove('open');
+
+    // Reopen the dCR in 'both' mode instead of closing it
+    crManuallyHidden = false;
+    crButtonMode = null; // force rebuild
+    updateCountReport();
     syncHubButton();
+
 };
 
 // Ctrl+Shift+D to toggle debug panel
@@ -2433,7 +2547,60 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
+// Arrow keys for Report Mode navigation
+// Up/Down = navigate bridges, Left/Right = cycle categories
+document.addEventListener('keydown', function(e) {
+    if (!reportPanelOpen || tourActive || reTourActive) return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        reportNextBridge();
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        reportPrevBridge();
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        // Cycle through categories
+        const catOrder = ['critical', 'emergent', 'satisfactory', 'na', 'hubdata', 'total'];
+        let idx = catOrder.indexOf(reportCategory);
+        if (e.key === 'ArrowRight') {
+            idx = (idx + 1) % catOrder.length;
+        } else {
+            idx = (idx - 1 + catOrder.length) % catOrder.length;
+        }
+        switchReportCategory(catOrder[idx]);
+    }
+});
+
 // Update status bar
+// Dynamically center status bar text in the visible area (accounting for open panels)
+function centerStatusBars() {
+    // Determine leftmost open panel width
+    let leftOffset = 0;
+    const reportsPanel = document.getElementById('reportsPanel');
+    const evalPanel = document.getElementById('evaluationPanel');
+    const attrPanel = document.getElementById('attributesPanel');
+    const hubPanel = document.getElementById('hubPanel');
+
+    // Reports panel is widest (384px) and always on top when open
+    if (reportsPanel && reportsPanel.classList.contains('open')) {
+        leftOffset = 384;
+    } else if (hubPanel && hubPanel.classList.contains('open')) {
+        leftOffset = 320;
+    } else if (attrPanel && attrPanel.classList.contains('open')) {
+        leftOffset = 320;
+    } else if (evalPanel && evalPanel.classList.contains('open')) {
+        leftOffset = 320;
+    }
+
+    // Apply to both status bars — use padding-left to shift center point
+    const statusBar = document.getElementById('statusBar');
+    const reStatusBar = document.getElementById('re-status-bar');
+    if (statusBar) statusBar.style.paddingLeft = leftOffset + 'px';
+    if (reStatusBar) reStatusBar.style.paddingLeft = leftOffset + 'px';
+}
+
 function updateStatusBar() {
     const statusBar = document.getElementById('statusBar');
     const statusText = document.getElementById('statusText');
@@ -2464,6 +2631,7 @@ function updateStatusBar() {
     }
     
     statusText.textContent = text;
+    centerStatusBars();
 }
 
 // Calculate inspection status for a bridge
@@ -2660,8 +2828,13 @@ function updateBridgesForInspection() {
         marker.bringToFront(); // Ensure proper z-ordering
     });
     
-    // Apply count category filter (if active)
-    applyCountCategoryFilter();
+    // If a both-mode dCR button is active, re-apply its isolation
+    if (bothActiveSection && bothActiveCategory) {
+        applyBothCategoryFilter();
+    } else {
+        // Apply count category filter (if active)
+        applyCountCategoryFilter();
+    }
 
     // Update count report
     updateCountReport();
@@ -2817,6 +2990,7 @@ function showInspectionsPopup(bridge) {
 
 // ===== ATTRIBUTES FILTER TOGGLE (v7.0.11 - SMART SWITCHING) =====
 window.toggleAttributesPanel = function() {
+    closeReportExplorerIfOpen();
     const attrPanel = document.getElementById('attributesPanel');
     const condPanel = document.getElementById('evaluationPanel');
     const hubPanel = document.getElementById('hubPanel');
@@ -2837,10 +3011,12 @@ window.toggleAttributesPanel = function() {
         if (hubPanelActive) { hubPanelActive = false; updateBridgeSizes(); }
     }
     updateUrlHash();
+    centerStatusBars();
 };
 
 // Condition filter toggle
 window.toggleEvaluationPanel = function() {
+    closeReportExplorerIfOpen();
     const attrPanel = document.getElementById('attributesPanel');
     const condPanel = document.getElementById('evaluationPanel');
     const hubPanel = document.getElementById('hubPanel');
@@ -2862,6 +3038,7 @@ window.toggleEvaluationPanel = function() {
         if (hubPanelActive) { hubPanelActive = false; updateBridgeSizes(); }
     }
     updateUrlHash();
+    centerStatusBars();
 };
 
 // ===== ATTRIBUTES FILTER SYSTEM (v7.0.7) =====
@@ -3234,8 +3411,9 @@ function applyAttributesFilter() {
                 document.getElementById('statusText').textContent = 'MODE: Default';
             }
         }
+        centerStatusBars();
     }
-    
+
     // Reapply bridge visibility
     updateBridgeSizes();
 
@@ -3677,13 +3855,29 @@ function autoZoomToFilteredBridges() {
     
     if (count > 0) {
         const bounds = [[minLat, minLng], [maxLat, maxLng]];
+        // Calculate left padding based on which panel is open
+        let leftPad = 50;
+        const reportsPanel = document.getElementById('reportsPanel');
+        const evalPanel = document.getElementById('evaluationPanel');
+        const attrPanel = document.getElementById('attributesPanel');
+        const hubPanel = document.getElementById('hubPanel');
+        if (reportsPanel && reportsPanel.classList.contains('open')) {
+            leftPad = 384 + 30;
+        } else if (hubPanel && hubPanel.classList.contains('open')) {
+            leftPad = 320 + 30;
+        } else if (attrPanel && attrPanel.classList.contains('open')) {
+            leftPad = 320 + 30;
+        } else if (evalPanel && evalPanel.classList.contains('open')) {
+            leftPad = 320 + 30;
+        }
         map.fitBounds(bounds, {
-            padding: [50, 50],
+            paddingTopLeft: [leftPad, 50],
+            paddingBottomRight: [50, 50],
             maxZoom: 12,
             animate: true,
             duration: 0.5
         });
-        console.log(`Auto-zoomed to ${count} filtered bridges`);
+        console.log(`Auto-zoomed to ${count} filtered bridges (leftPad: ${leftPad})`);
     }
 }
 
@@ -3707,7 +3901,7 @@ function buildCountReportButtons(mode) {
     const body = document.getElementById('countReportBody');
     if (!body) return;
 
-    const btnStyle = 'display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 4px 8px; margin-bottom: 2px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; transition: all 0.2s;';
+    const btnStyle = 'display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 4px 8px; margin-bottom: 2px; background: transparent; border: 2px solid rgba(255,255,255,0.2); border-radius: 4px; cursor: pointer; transition: all 0.2s;';
     const dotStyle = 'width: 10px; height: 10px; border-radius: 50%; border: 1px solid #fff;';
     const labelStyle = 'color: #fff; font-weight: 600; font-size: 9pt;';
     const countStyle = 'color: #fff; font-size: 10pt; font-weight: 700;';
@@ -3724,7 +3918,7 @@ function buildCountReportButtons(mode) {
                 </div>
                 <div style="display: flex; align-items: center; gap: 6px;">
                     <span style="${countStyle}" id="count-critical">0</span>
-                    <span onclick="event.stopPropagation(); showCategoryTable('critical')"
+                    <span onclick="event.stopPropagation(); toggleCategoryTablePopup('critical','insp')"
                           style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
                 </div>
             </button>`;
@@ -3735,7 +3929,7 @@ function buildCountReportButtons(mode) {
                 </div>
                 <div style="display: flex; align-items: center; gap: 6px;">
                     <span style="${countStyle}" id="count-emergent">0</span>
-                    <span onclick="event.stopPropagation(); showCategoryTable('emergent')"
+                    <span onclick="event.stopPropagation(); toggleCategoryTablePopup('emergent','insp')"
                           style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
                 </div>
             </button>`;
@@ -3746,7 +3940,7 @@ function buildCountReportButtons(mode) {
                 </div>
                 <div style="display: flex; align-items: center; gap: 6px;">
                     <span style="${countStyle}" id="count-satisfactory">0</span>
-                    <span onclick="event.stopPropagation(); showCategoryTable('satisfactory')"
+                    <span onclick="event.stopPropagation(); toggleCategoryTablePopup('satisfactory','insp')"
                           style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
                 </div>
             </button>`;
@@ -3759,7 +3953,7 @@ function buildCountReportButtons(mode) {
                 </div>
                 <div style="display: flex; align-items: center; gap: 6px;">
                     <span style="${countStyle}" id="count-critical">0</span>
-                    <span onclick="event.stopPropagation(); showMaintenanceCategoryTable('critical')"
+                    <span onclick="event.stopPropagation(); toggleCategoryTablePopup('critical','maint')"
                           style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
                 </div>
             </button>`;
@@ -3770,7 +3964,7 @@ function buildCountReportButtons(mode) {
                 </div>
                 <div style="display: flex; align-items: center; gap: 6px;">
                     <span style="${countStyle}" id="count-emergent">0</span>
-                    <span onclick="event.stopPropagation(); showMaintenanceCategoryTable('emergent')"
+                    <span onclick="event.stopPropagation(); toggleCategoryTablePopup('emergent','maint')"
                           style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
                 </div>
             </button>`;
@@ -3781,83 +3975,89 @@ function buildCountReportButtons(mode) {
                 </div>
                 <div style="display: flex; align-items: center; gap: 6px;">
                     <span style="${countStyle}" id="count-satisfactory">0</span>
-                    <span onclick="event.stopPropagation(); showMaintenanceCategoryTable('satisfactory')"
+                    <span onclick="event.stopPropagation(); toggleCategoryTablePopup('satisfactory','maint')"
                           style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
                 </div>
             </button>`;
         }
     } else if (mode === 'both') {
         // Dual-section mode: Maintenance + Inspection
-        const sectionLabelStyle = 'color: #FFB81C; font-weight: 700; font-size: 8pt; text-transform: uppercase; letter-spacing: 1.5px; padding: 4px 0 2px 2px; margin-top: 2px;';
+        const sectionBtnStyle = 'display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 3px 8px; margin-top: 2px; margin-bottom: 2px; background: rgba(0, 40, 85, 0.5); border: 2px solid rgba(255,184,28,0.4); border-radius: 4px; cursor: pointer; transition: all 0.2s;';
+        const sectionLabelSpanStyle = 'color: #FFB81C; font-weight: 700; font-size: 8pt; text-transform: uppercase; letter-spacing: 1.5px;';
+        const sectionCountStyle = 'color: #FFB81C; font-size: 9pt; font-weight: 700;';
 
-        // — Maintenance section —
-        html += `<div style="${sectionLabelStyle}">Maintenance</div>`;
-        html += `<button id="btn-maint-critical" onclick="toggleCountCategory('critical')" style="${btnStyle}">
+        // — Maintenance section total button —
+        html += `<button id="btn-maint-total" onclick="toggleBothCategory('maint','total')" style="${sectionBtnStyle}" data-tip="Show all bridges in the maintenance condition theme — colored by worst component rating (red = critical, orange = emergent, green = satisfactory).">
+            <span style="${sectionLabelSpanStyle}">Maintenance</span>
+        </button>`;
+        html += `<button id="btn-maint-critical" onclick="toggleBothCategory('maint','critical')" style="${btnStyle}" data-tip="Isolate bridges with a worst condition rating of 1 (critical). Click again to deselect.">
             <div style="display: flex; align-items: center; gap: 8px;">
                 <div style="${dotStyle} background: #dc2626;"></div>
                 <span style="${labelStyle}">Critical</span>
             </div>
             <div style="display: flex; align-items: center; gap: 6px;">
                 <span style="${countStyle}" id="count-maint-critical">0</span>
-                <span onclick="event.stopPropagation(); showMaintenanceCategoryTable('critical')"
+                <span onclick="event.stopPropagation(); toggleCategoryTablePopup('critical','maint')"
                       style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
             </div>
         </button>`;
-        html += `<button id="btn-maint-emergent" onclick="toggleCountCategory('emergent')" style="${btnStyle}">
+        html += `<button id="btn-maint-emergent" onclick="toggleBothCategory('maint','emergent')" style="${btnStyle}" data-tip="Isolate bridges with a worst condition rating of 2–4 (emergent). Click again to deselect.">
             <div style="display: flex; align-items: center; gap: 8px;">
                 <div style="${dotStyle} background: #F97316;"></div>
                 <span style="${labelStyle}">Emergent</span>
             </div>
             <div style="display: flex; align-items: center; gap: 6px;">
                 <span style="${countStyle}" id="count-maint-emergent">0</span>
-                <span onclick="event.stopPropagation(); showMaintenanceCategoryTable('emergent')"
+                <span onclick="event.stopPropagation(); toggleCategoryTablePopup('emergent','maint')"
                       style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
             </div>
         </button>`;
-        html += `<button id="btn-maint-satisfactory" onclick="toggleCountCategory('satisfactory')" style="${btnStyle}">
+        html += `<button id="btn-maint-satisfactory" onclick="toggleBothCategory('maint','satisfactory')" style="${btnStyle}" data-tip="Isolate bridges with a worst condition rating of 5–9 (satisfactory). Click again to deselect.">
             <div style="display: flex; align-items: center; gap: 8px;">
                 <div style="${dotStyle} background: #10b981;"></div>
                 <span style="${labelStyle}">Satisfactory</span>
             </div>
             <div style="display: flex; align-items: center; gap: 6px;">
                 <span style="${countStyle}" id="count-maint-satisfactory">0</span>
-                <span onclick="event.stopPropagation(); showMaintenanceCategoryTable('satisfactory')"
+                <span onclick="event.stopPropagation(); toggleCategoryTablePopup('satisfactory','maint')"
                       style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
             </div>
         </button>`;
 
-        // — Inspection section —
-        html += `<div style="${sectionLabelStyle} margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.15); padding-top: 6px;">Inspection</div>`;
-        html += `<button id="btn-insp-critical" onclick="toggleCountCategory('critical')" style="${btnStyle}">
+        // — Inspection section total button —
+        html += `<button id="btn-insp-total" onclick="toggleBothCategory('insp','total')" style="${sectionBtnStyle} margin-top: 6px; border-top: 1px solid rgba(255,255,255,0.15);" data-tip="Show all bridges in the inspection theme — colored by due-date status (red gradient = past due, orange = upcoming, green = completed).">
+            <span style="${sectionLabelSpanStyle}">Inspection</span>
+        </button>`;
+        html += `<button id="btn-insp-critical" onclick="toggleBothCategory('insp','critical')" style="${btnStyle}" data-tip="Isolate bridges with at least one inspection past its due date. Click again to deselect.">
             <div style="display: flex; align-items: center; gap: 8px;">
                 <div style="${dotStyle} background: #dc2626;"></div>
                 <span style="${labelStyle}">Past Due</span>
             </div>
             <div style="display: flex; align-items: center; gap: 6px;">
                 <span style="${countStyle}" id="count-insp-critical">0</span>
-                <span onclick="event.stopPropagation(); showCategoryTableForBothMode('critical')"
+                <span onclick="event.stopPropagation(); toggleCategoryTablePopup('critical','both-insp')"
                       style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
             </div>
         </button>`;
-        html += `<button id="btn-insp-emergent" onclick="toggleCountCategory('emergent')" style="${btnStyle}">
+        html += `<button id="btn-insp-emergent" onclick="toggleBothCategory('insp','emergent')" style="${btnStyle}" data-tip="Isolate bridges with inspections due within the next 60 days. Click again to deselect.">
             <div style="display: flex; align-items: center; gap: 8px;">
                 <div style="${dotStyle} background: #F97316;"></div>
                 <span style="${labelStyle}">Upcoming</span>
             </div>
             <div style="display: flex; align-items: center; gap: 6px;">
                 <span style="${countStyle}" id="count-insp-emergent">0</span>
-                <span onclick="event.stopPropagation(); showCategoryTableForBothMode('emergent')"
+                <span onclick="event.stopPropagation(); toggleCategoryTablePopup('emergent','both-insp')"
                       style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
             </div>
         </button>`;
-        html += `<button id="btn-insp-satisfactory" onclick="toggleCountCategory('satisfactory')" style="${btnStyle}">
+        html += `<button id="btn-insp-satisfactory" onclick="toggleBothCategory('insp','satisfactory')" style="${btnStyle}" data-tip="Isolate bridges with all inspections completed and not due for 60+ days. Click again to deselect.">
             <div style="display: flex; align-items: center; gap: 8px;">
                 <div style="${dotStyle} background: #10B981;"></div>
                 <span style="${labelStyle}">Completed</span>
             </div>
             <div style="display: flex; align-items: center; gap: 6px;">
                 <span style="${countStyle}" id="count-insp-satisfactory">0</span>
-                <span onclick="event.stopPropagation(); showCategoryTableForBothMode('satisfactory')"
+                <span onclick="event.stopPropagation(); toggleCategoryTablePopup('satisfactory','both-insp')"
                       style="cursor:pointer; font-size:11pt; color:#FFB81C; opacity:1;" title="View table">☰</span>
             </div>
         </button>`;
@@ -3869,7 +4069,7 @@ function buildCountReportButtons(mode) {
     }
 
     // N/A — always present
-    html += `<button id="btn-na" onclick="toggleCountCategory('na')" style="${btnStyle}">
+    html += `<button id="btn-na" onclick="toggleCountCategory('na')" style="${btnStyle}" data-tip="Isolate bridges with missing or invalid condition ratings. Click again to restore all.">
         <div style="display: flex; align-items: center; gap: 8px;">
             <div style="${dotStyle} background: #6b7280;"></div>
             <span style="${labelStyle}">N/A</span>
@@ -3879,7 +4079,7 @@ function buildCountReportButtons(mode) {
 
     // HUB Data — always present (extra bottom margin before Total)
     // Cycles through 3 modes: Off (blue) → Rings (yellow) → Theme (green)
-    html += `<button id="btn-hubdata" onclick="toggleProjectRings()" style="${btnStyle} margin-bottom: 6px;">
+    html += `<button id="btn-hubdata" onclick="toggleProjectRings()" style="${btnStyle} margin-bottom: 6px;" data-tip="Cycle HUB Data display: Off, Rings around project bridges, or Full green highlight. Three clicks to cycle through all modes.">
         <div style="display: flex; align-items: center; gap: 8px;">
             <div id="hubdata-dot" style="${dotStyle} background: #22c55e;"></div>
             <span id="hubdata-label" style="${labelStyle}">HUB Data</span>
@@ -3888,7 +4088,7 @@ function buildCountReportButtons(mode) {
     </button>`;
 
     // Total — always present
-    html += `<button id="btn-total" onclick="toggleCountCategory('total')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 4px 8px; background: rgba(255,184,28,0.1); border: 2px solid var(--wvdoh-yellow); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
+    html += `<button id="btn-total" onclick="toggleCountCategory('total')" style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 4px 8px; background: rgba(0, 40, 85, 0.5); border: 2px solid var(--wvdoh-yellow); border-radius: 4px; cursor: pointer; transition: all 0.2s;" data-tip="Reset to the default district-colored view showing all bridges (except N/A). Clears any active category isolation.">
         <span style="color: var(--wvdoh-yellow); font-weight: 700; font-size: 9pt; text-transform: uppercase; letter-spacing: 1px;">TOTAL</span>
         <span style="color: var(--wvdoh-yellow); font-size: 10pt; font-weight: 700;" id="count-total">0</span>
     </button>`;
@@ -4008,6 +4208,74 @@ function getBridgeCategory(bridge) {
     const worst = Math.min(...ratings);
     if (worst <= 1) return 'critical';
     if (worst <= 4) return 'emergent';
+    return 'satisfactory';
+}
+
+// Categorize a bridge by condition ratings only (maintenance section)
+function getMaintenanceCategoryForBridge(bridge) {
+    const ratingMap = {
+        deck: bridge.deck_rating,
+        superstructure: bridge.superstructure_rating,
+        substructure: bridge.substructure_rating,
+        bearings: bridge.bearings_rating,
+        joints: bridge.joints_rating
+    };
+
+    // If evaluation sliders active, use only the active slider components
+    if (evaluationActive) {
+        const severitySliders = Object.entries(sliderValues)
+            .filter(([k, v]) => v > 0 && k !== 'sufficiency');
+        if (severitySliders.length > 0) {
+            const ratings = severitySliders
+                .map(([key]) => ratingMap[key])
+                .filter(r => typeof r === 'number' && !isNaN(r) && r >= 1 && r <= 9);
+            if (ratings.length === 0) return 'na';
+            const worst = Math.min(...ratings);
+            if (worst <= 1) return 'critical';
+            if (worst <= 4) return 'emergent';
+            return 'satisfactory';
+        }
+    }
+
+    const ratings = Object.values(ratingMap)
+        .filter(r => typeof r === 'number' && !isNaN(r) && r >= 1 && r <= 9);
+    if (ratings.length === 0) return 'na';
+    const worst = Math.min(...ratings);
+    if (worst <= 1) return 'critical';
+    if (worst <= 4) return 'emergent';
+    return 'satisfactory';
+}
+
+// Categorize a bridge by inspection due dates only (inspection section)
+function getInspectionCategoryForBridge(bridge) {
+    const inspections = inspectionsData[bridge.bars_number];
+    if (!inspections) return 'na';
+
+    let relevant = inspections;
+    if (selectedInspectionTypes.length > 0) {
+        relevant = inspections.filter(i => selectedInspectionTypes.includes(i.type));
+    }
+    if (selectedMonths.length > 0) {
+        relevant = relevant.filter(i => {
+            const d = parseDateString(i.due);
+            return d && selectedMonths.includes(d.getMonth() + 1);
+        });
+    }
+    if (relevant.length === 0) return 'na';
+
+    const today = new Date();
+    const sixtyDays = new Date(today.getTime() + 60 * 24 * 60 * 60 * 1000);
+    let hasOverdue = false, hasUpcoming = false;
+
+    relevant.forEach(insp => {
+        const due = parseDateString(insp.due);
+        if (!due) return;
+        if (due < today) hasOverdue = true;
+        else if (due <= sixtyDays) hasUpcoming = true;
+    });
+
+    if (hasOverdue) return 'critical';
+    if (hasUpcoming) return 'emergent';
     return 'satisfactory';
 }
 
@@ -4140,10 +4408,27 @@ const categoryLabels = {
     satisfactory: 'Completed'
 };
 
+// Toggle category table popup — clicking hamburger again hides it
+function toggleCategoryTablePopup(category, mode) {
+    const existing = document.getElementById('category-table-popup');
+    if (existing) {
+        existing.remove();
+        return;
+    }
+    if (mode === 'maint') {
+        showMaintenanceCategoryTable(category);
+    } else if (mode === 'both-insp') {
+        showCategoryTableForBothMode(category);
+    } else {
+        showCategoryTable(category);
+    }
+}
+
 // Show a detail table popup for a CR inspection category
 function showCategoryTable(category) {
+    removeReportHighlight();
     const savedPos = _saveCategoryPopupPos();
-    const label = categoryLabels[category] || category;
+    const label = getInspectionTableTitle(category);
     const today = new Date();
     const rows = [];
 
@@ -4216,6 +4501,12 @@ function showCategoryTable(category) {
         if (!worstInsp) return;
 
         const worstDue = parseDateString(worstInsp.due);
+        const dueFmt = worstDue ? ((worstDue.getMonth()+1)+'/'+worstDue.getDate()+'/'+String(worstDue.getFullYear()).slice(-2)) : (worstInsp.due || '');
+        // Completion date and "days since" for Completed category
+        const compDate = parseDateString(worstInsp.completion);
+        const compDateStr = compDate ? ((compDate.getMonth()+1)+'/'+compDate.getDate()+'/'+String(compDate.getFullYear()).slice(-2)) : '';
+        const daysSince = compDate ? Math.floor((today - compDate) / 86400000) : null;
+
         rows.push({
             district: bridge.district,
             bars: bridge.bars_number,
@@ -4226,8 +4517,10 @@ function showCategoryTable(category) {
             type: worstInsp.type,
             interval: worstInsp.interval || 24,
             dueDate: worstDue ? worstDue.getTime() : 0,
-            dueDateStr: worstInsp.due || '',
-            days: worstDays
+            dueDateStr: dueFmt,
+            days: worstDays,
+            completionDateStr: compDateStr,
+            daysSince: daysSince
         });
     });
 
@@ -4246,8 +4539,9 @@ function showCategoryTable(category) {
 
 // Rebuild the category table body from sorted rows
 function _buildCategoryTablePopup(rows, category) {
-    const label = categoryLabels[category] || category;
-    const daysColHeader = category === 'critical' ? 'Days Past Due' : 'Due';
+    const label = getInspectionTableTitle(category);
+    const isCompleted = category === 'satisfactory';
+    const daysColHeader = category === 'critical' ? 'Days Past Due' : isCompleted ? 'Since' : 'Due';
 
     // Determine sort arrow indicators
     const sortCol = window._categoryTableSortCol;
@@ -4263,7 +4557,10 @@ function _buildCategoryTablePopup(rows, category) {
         const titleCaseName = (r.name || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
         const mapsLink = `https://www.google.com/maps?q=${r.lat},${r.lng}`;
         let daysText, rowStyle = '';
-        if (r.days > 0) {
+        if (isCompleted) {
+            daysText = r.daysSince != null ? `${r.daysSince}d` : '—';
+            rowStyle = '';
+        } else if (r.days > 0) {
             daysText = `${r.days}`;
             rowStyle = 'background: rgba(220, 38, 38, 0.2); color: #FCA5A5;';
         } else if (r.days === 0) {
@@ -4274,16 +4571,30 @@ function _buildCategoryTablePopup(rows, category) {
             rowStyle = '';
         }
 
-        tableRows += `<tr style="${rowStyle} border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
-            <td style="padding: 6px 8px; text-align: center;">${i + 1}</td>
-            <td style="padding: 6px 8px;">${r.district.replace('District ', '')}</td>
-            <td style="padding: 6px 8px;"><a href="${r.barsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${r.bars}</a></td>
-            <td class="col-name" style="padding: 6px 8px;"><a href="${mapsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${titleCaseName}</a></td>
-            <td style="padding: 6px 8px;">${r.type}</td>
-            <td style="padding: 6px 8px; text-align: center;">${r.interval}</td>
-            <td style="padding: 6px 8px; text-align: center;">${r.dueDateStr}</td>
-            <td style="padding: 6px 8px; text-align: center;">${daysText}</td>
-        </tr>`;
+        if (isCompleted) {
+            tableRows += `<tr style="${rowStyle} border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
+                <td style="padding: 6px 8px; text-align: center;">${i + 1}</td>
+                <td style="padding: 6px 8px;">${r.district.replace('District ', '')}</td>
+                <td style="padding: 6px 8px;"><a href="${r.barsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${r.bars}</a></td>
+                <td class="col-name" style="padding: 6px 8px;"><a href="${mapsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${titleCaseName}</a></td>
+                <td style="padding: 6px 8px;">${r.type}</td>
+                <td style="padding: 6px 8px; text-align: center;">${r.completionDateStr || '—'}</td>
+                <td style="padding: 6px 8px; text-align: center;">${r.interval}</td>
+                <td style="padding: 6px 8px; text-align: center;">${daysText}</td>
+                <td style="padding: 6px 8px; text-align: center;">${r.dueDateStr}</td>
+            </tr>`;
+        } else {
+            tableRows += `<tr style="${rowStyle} border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
+                <td style="padding: 6px 8px; text-align: center;">${i + 1}</td>
+                <td style="padding: 6px 8px;">${r.district.replace('District ', '')}</td>
+                <td style="padding: 6px 8px;"><a href="${r.barsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${r.bars}</a></td>
+                <td class="col-name" style="padding: 6px 8px;"><a href="${mapsLink}" target="_blank" style="color: #60A5FA; text-decoration: underline;">${titleCaseName}</a></td>
+                <td style="padding: 6px 8px;">${r.type}</td>
+                <td style="padding: 6px 8px; text-align: center;">${r.interval}</td>
+                <td style="padding: 6px 8px; text-align: center;">${r.dueDateStr}</td>
+                <td style="padding: 6px 8px; text-align: center;">${daysText}</td>
+            </tr>`;
+        }
     });
 
     // Remove any existing category table popup
@@ -4306,10 +4617,13 @@ function _buildCategoryTablePopup(rows, category) {
     const inspNavButtons = inspCatNav
         .map(c => {
             const isCurrent = c.key === category;
-            const countEl = document.getElementById(c.countId);
+            const countEl = document.getElementById(c.countId) || document.getElementById('count-insp-' + c.key);
             const count = countEl ? parseInt(countEl.textContent, 10) : 0;
             const empty = isNaN(count) || count === 0;
-            if (isCurrent || empty) {
+            if (isCurrent) {
+                return `<button disabled style="${inspNavBtnStyle} background: ${c.color}; color: #fff; cursor: default; opacity: 0.7;">${c.label}</button>`;
+            }
+            if (empty) {
                 return `<button disabled style="${inspNavBtnStyle} background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.3); cursor: default;">${c.label}</button>`;
             }
             return `<button onclick="showCategoryTable('${c.key}')" style="${inspNavBtnStyle} background: ${c.color}; color: #fff; cursor: pointer;">${c.label}</button>`;
@@ -4318,7 +4632,7 @@ function _buildCategoryTablePopup(rows, category) {
 
     popup.innerHTML = `
         <div class="info-header" id="category-table-header" style="cursor: default;">
-            <h3>${label} — ${rows.length} Bridge${rows.length !== 1 ? 's' : ''}</h3>
+            <h3>${label} \u2014 ${rows.length} Bridge${rows.length !== 1 ? 's' : ''}</h3>
             <div style="display: flex; align-items: center; gap: 8px;">
                 ${inspNavButtons}
                 <button onclick="openCrReportShare(this)" title="Share report"
@@ -4329,9 +4643,31 @@ function _buildCategoryTablePopup(rows, category) {
             </div>
         </div>
         <div class="info-content" style="cursor: default;">
-            <div style="font-size: 8pt; color: rgba(255,255,255,0.45); font-style: italic; margin-bottom: 6px;">Sorted by district. Click any column header to re-sort. Export reflects current sort order.</div>
             <table style="border-collapse: collapse; font-size: 10pt; color: #fff; cursor: text;">
-                <colgroup>
+                ${isCompleted ? `<colgroup>
+                    <col style="width: 35px;">
+                    <col style="width: 55px;">
+                    <col style="width: 85px;">
+                    <col>
+                    <col style="width: 100px;">
+                    <col style="width: 80px;">
+                    <col style="width: 60px;">
+                    <col style="width: 60px;">
+                    <col style="width: 80px;">
+                </colgroup>
+                <thead>
+                    <tr style="background: rgba(0, 40, 85, 0.95); border-bottom: 2px solid #FFB81C; position: sticky; top: 0; z-index: 1;">
+                        <th style="${thStyle} text-align: center; cursor: default;">#</th>
+                        <th style="${thStyle} text-align: left;" onclick="sortCategoryTable('district')">District${arrow('district')}</th>
+                        <th style="${thStyle} text-align: left;" onclick="sortCategoryTable('bars')">BARS${arrow('bars')}</th>
+                        <th class="col-name" style="${thStyle} text-align: left;" onclick="sortCategoryTable('name')">Bridge Name${arrow('name')}</th>
+                        <th style="${thStyle} text-align: left;" onclick="sortCategoryTable('type')">Type${arrow('type')}</th>
+                        <th style="${thStyle} text-align: center;" onclick="sortCategoryTable('completionDateStr')">Completed${arrow('completionDateStr')}</th>
+                        <th style="${thStyle} text-align: center;" onclick="sortCategoryTable('interval')">Interval${arrow('interval')}</th>
+                        <th style="${thStyle} text-align: center;" onclick="sortCategoryTable('daysSince')">${daysColHeader}${arrow('daysSince')}</th>
+                        <th style="${thStyle} text-align: center;" onclick="sortCategoryTable('dueDate')">Due${arrow('dueDate')}</th>
+                    </tr>
+                </thead>` : `<colgroup>
                     <col style="width: 35px;">
                     <col style="width: 55px;">
                     <col style="width: 85px;">
@@ -4342,7 +4678,7 @@ function _buildCategoryTablePopup(rows, category) {
                     <col style="width: 100px;">
                 </colgroup>
                 <thead>
-                    <tr style="background: rgba(0, 40, 85, 0.3); border-bottom: 2px solid #FFB81C;">
+                    <tr style="background: rgba(0, 40, 85, 0.95); border-bottom: 2px solid #FFB81C; position: sticky; top: 0; z-index: 1;">
                         <th style="${thStyle} text-align: center; cursor: default;">#</th>
                         <th style="${thStyle} text-align: left;" onclick="sortCategoryTable('district')">District${arrow('district')}</th>
                         <th style="${thStyle} text-align: left;" onclick="sortCategoryTable('bars')">BARS${arrow('bars')}</th>
@@ -4352,7 +4688,7 @@ function _buildCategoryTablePopup(rows, category) {
                         <th style="${thStyle} text-align: center;" onclick="sortCategoryTable('dueDate')">Due Date${arrow('dueDate')}</th>
                         <th style="${thStyle} text-align: center;" onclick="sortCategoryTable('days')">${daysColHeader}${arrow('days')}</th>
                     </tr>
-                </thead>
+                </thead>`}
                 <tbody>
                     ${tableRows}
                 </tbody>
@@ -4374,7 +4710,7 @@ function sortCategoryTable(col) {
         window._categoryTableSortAsc = !window._categoryTableSortAsc;
     } else {
         window._categoryTableSortCol = col;
-        window._categoryTableSortAsc = col === 'days' ? false : true;
+        window._categoryTableSortAsc = (col === 'days' || col === 'daysSince') ? false : true;
     }
 
     const asc = window._categoryTableSortAsc;
@@ -4396,9 +4732,16 @@ function sortCategoryTable(col) {
 function exportCategoryCSV(rows, label) {
     if (!rows || rows.length === 0) return;
 
-    const headers = '#,District,BARS,Bridge Name,Type,Interval,Due Date,Days Past Due';
+    const cat = window._categoryTableCategory;
+    const isCompleted = cat === 'satisfactory';
+    const headers = isCompleted
+        ? '#,District,BARS,Bridge Name,Type,Completed,Interval,Days Since,Due Date'
+        : '#,District,BARS,Bridge Name,Type,Interval,Due Date,Days Past Due';
     const csvRows = rows.map((r, i) => {
         const titleCaseName = (r.name || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+        if (isCompleted) {
+            return `${i + 1},${r.district.replace('District ', '')},"${r.bars}","${titleCaseName}",${r.type},${r.completionDateStr || ''},${r.interval},${r.daysSince != null ? r.daysSince : ''},${r.dueDateStr}`;
+        }
         let daysText;
         if (r.days > 0) daysText = r.days;
         else if (r.days === 0) daysText = 0;
@@ -4446,7 +4789,15 @@ function getMaintenanceTableTitle(category) {
         .filter(([k, v]) => v > 0 && k !== 'sufficiency')
         .map(([k]) => sliderShortNames[k] || k);
     const components = activeSliders.length > 0 ? activeSliders.join(' / ') : 'All Ratings';
-    return `${base} — ${components}`;
+    return `Maintenance \u2014 ${base} \u2014 ${components}`;
+}
+
+function getInspectionTableTitle(category) {
+    const base = categoryLabels[category] || category;
+    const types = selectedInspectionTypes.length > 0
+        ? selectedInspectionTypes.map(t => t.charAt(0).toUpperCase() + t.slice(1)).join(' / ')
+        : 'All Types';
+    return `Inspection \u2014 ${base} \u2014 ${types}`;
 }
 
 // Save current category-table-popup position before replacing it
@@ -4483,6 +4834,7 @@ function showCategoryTableForBothMode(category) {
 
 // Show a detail table popup for a maintenance CR category
 function showMaintenanceCategoryTable(category) {
+    removeReportHighlight();
     const savedPos = _saveCategoryPopupPos();
     const label = getMaintenanceTableTitle(category);
     const currentYear = new Date().getFullYear();
@@ -4522,8 +4874,8 @@ function showMaintenanceCategoryTable(category) {
             }
         }
 
-        // Must match the requested category
-        if (getBridgeCategory(bridge) !== category) return;
+        // Must match the requested maintenance category (always use maintenance logic)
+        if (getMaintenanceCategoryForBridge(bridge) !== category) return;
 
         // Get sufficiency rating (0-100% scale)
         const suffRaw = sufficiencyData[bridge.bars_number];
@@ -4651,10 +5003,13 @@ function _buildMaintenanceCategoryTablePopup(rows, category) {
     const navButtons = maintCatNav
         .map(c => {
             const isCurrent = c.key === category;
-            const countEl = document.getElementById(c.countId);
+            const countEl = document.getElementById(c.countId) || document.getElementById('count-maint-' + c.key);
             const count = countEl ? parseInt(countEl.textContent, 10) : 0;
             const empty = isNaN(count) || count === 0;
-            if (isCurrent || empty) {
+            if (isCurrent) {
+                return `<button disabled style="${navBtnStyle} background: ${c.color}; color: #fff; cursor: default; opacity: 0.7;">${c.label}</button>`;
+            }
+            if (empty) {
                 return `<button disabled style="${navBtnStyle} background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.3); cursor: default;">${c.label}</button>`;
             }
             return `<button onclick="showMaintenanceCategoryTable('${c.key}')" style="${navBtnStyle} background: ${c.color}; color: #fff; cursor: pointer;">${c.label}</button>`;
@@ -4667,7 +5022,7 @@ function _buildMaintenanceCategoryTablePopup(rows, category) {
     popup.style.cssText = 'max-width: 95vw; resize: none; cursor: default;';
     popup.innerHTML = `
         <div class="info-header" id="category-table-header" style="cursor: default;">
-            <h3>${label}</h3>
+            <h3>${label} \u2014 ${rows.length} Bridge${rows.length !== 1 ? 's' : ''}</h3>
             <div style="display: flex; align-items: center; gap: 8px;">
                 ${navButtons}
                 <button onclick="openCrReportShare(this)" title="Share report"
@@ -4678,7 +5033,6 @@ function _buildMaintenanceCategoryTablePopup(rows, category) {
             </div>
         </div>
         <div class="info-content" style="cursor: default;">
-            <div style="font-size: 8pt; color: rgba(255,255,255,0.45); font-style: italic; margin-bottom: 6px;">Sorted by district. Click any column header to re-sort. Export reflects current sort order.</div>
             <table style="border-collapse: collapse; font-size: 10pt; color: #fff; cursor: text;">
                 <colgroup>
                     <col style="width: 35px;">
@@ -4697,7 +5051,7 @@ function _buildMaintenanceCategoryTablePopup(rows, category) {
                     <col style="width: 40px;">
                 </colgroup>
                 <thead>
-                    <tr style="background: rgba(0, 40, 85, 0.3); border-bottom: 2px solid #FFB81C;">
+                    <tr style="background: rgba(0, 40, 85, 0.95); border-bottom: 2px solid #FFB81C; position: sticky; top: 0; z-index: 1;">
                         <th style="${thStyle} text-align: center; cursor: default;">#</th>
                         <th style="${thStyle} text-align: left;" onclick="sortMaintenanceCategoryTable('district')">District${arrow('district')}</th>
                         <th style="${thStyle} text-align: left;" onclick="sortMaintenanceCategoryTable('bars')">BARS${arrow('bars')}</th>
@@ -4814,132 +5168,51 @@ function updateCountReport() {
     const hasCondition = hasConditionSlidersActive();
     const hasAttributes = typeof attributesFilterState !== 'undefined' && attributesFilterState.active;
 
-    // Determine which button set we need
+    // Always use 'both' mode — all three sections visible at all times
     const filtersEngaged = hasCondition || inspectionFiltersActive || hasAttributes || currentSearchQuery.length > 0;
-    let targetMode;
-    if (filtersEngaged) {
-        targetMode = 'full';
-    } else {
-        targetMode = 'both'; // No specific filter — show dual Maintenance + Inspection
-    }
+    const targetMode = 'both';
 
     // Build/rebuild buttons if mode changed
     buildCountReportButtons(targetMode);
 
-    // Calculate max counts (from ALL bridges)
+    // Calculate counts for both sections
     maxCounts = calculateMaxBridgeCounts();
+    const inspCounts = calculateInspectionCounts();
 
-    if (targetMode === 'both') {
-        // Dual-section mode: populate both sets of counts
-        const inspCounts = calculateInspectionCounts();
+    // Maintenance counts
+    const elMC = document.getElementById('count-maint-critical');
+    const elME = document.getElementById('count-maint-emergent');
+    const elMS = document.getElementById('count-maint-satisfactory');
+    if (elMC) elMC.textContent = maxCounts.critical;
+    if (elME) elME.textContent = maxCounts.emergent;
+    if (elMS) elMS.textContent = maxCounts.satisfactory;
 
-        // Maintenance counts
-        const elMC = document.getElementById('count-maint-critical');
-        const elME = document.getElementById('count-maint-emergent');
-        const elMS = document.getElementById('count-maint-satisfactory');
-        if (elMC) elMC.textContent = maxCounts.critical;
-        if (elME) elME.textContent = maxCounts.emergent;
-        if (elMS) elMS.textContent = maxCounts.satisfactory;
+    // Inspection counts
+    const elIC = document.getElementById('count-insp-critical');
+    const elIE = document.getElementById('count-insp-emergent');
+    const elIS = document.getElementById('count-insp-satisfactory');
+    if (elIC) elIC.textContent = inspCounts.critical;
+    if (elIE) elIE.textContent = inspCounts.emergent;
+    if (elIS) elIS.textContent = inspCounts.satisfactory;
 
-        // Inspection counts
-        const elIC = document.getElementById('count-insp-critical');
-        const elIE = document.getElementById('count-insp-emergent');
-        const elIS = document.getElementById('count-insp-satisfactory');
-        if (elIC) elIC.textContent = inspCounts.critical;
-        if (elIE) elIE.textContent = inspCounts.emergent;
-        if (elIS) elIS.textContent = inspCounts.satisfactory;
+    // Shared bottom buttons
+    const elNA = document.getElementById('count-na');
+    const elHub = document.getElementById('count-hubdata');
+    const elTotal = document.getElementById('count-total');
+    if (elNA) elNA.textContent = maxCounts.na;
+    if (elHub) elHub.textContent = maxCounts.hubdata;
+    if (elTotal) elTotal.textContent = maxCounts.total;
 
-        // Shared bottom buttons
-        document.getElementById('count-na').textContent = maxCounts.na;
-        document.getElementById('count-hubdata').textContent = maxCounts.hubdata;
-        document.getElementById('count-total').textContent = maxCounts.total;
-    } else {
-        // Single-mode (full): existing behavior
-        const elCritical = document.getElementById('count-critical');
-        const elEmergent = document.getElementById('count-emergent');
-        const elSatisfactory = document.getElementById('count-satisfactory');
-        const elCompleted = document.getElementById('count-completed');
-        if (elCritical) elCritical.textContent = maxCounts.critical;
-        if (elEmergent) elEmergent.textContent = maxCounts.emergent;
-        if (elSatisfactory) elSatisfactory.textContent = maxCounts.satisfactory;
-        if (elCompleted) elCompleted.textContent = maxCounts.completed;
-        document.getElementById('count-na').textContent = maxCounts.na;
-        document.getElementById('count-hubdata').textContent = maxCounts.hubdata;
-        document.getElementById('count-total').textContent = maxCounts.total;
+    // N/A button
+    const btnNA2 = document.getElementById('btn-na');
+    if (btnNA2) {
+        btnNA2.disabled = false;
+        btnNA2.style.cursor = 'pointer';
+        btnNA2.title = 'Click to isolate N/A bridges';
     }
 
-    const btnCritical = document.getElementById('btn-critical');
-    const btnEmergent = document.getElementById('btn-emergent');
-    const btnSatisfactory = document.getElementById('btn-satisfactory');
-    const btnCompleted = document.getElementById('btn-completed');
-    const btnNA = document.getElementById('btn-na');
+    // HUB Data button — cycles through 3 modes (off/rings/theme)
     const btnHubdata = document.getElementById('btn-hubdata');
-
-    // Condition buttons — only exist in 'full' mode
-    if (btnCritical) {
-        if (maxCounts.critical > 0) {
-            btnCritical.disabled = false;
-            btnCritical.style.cursor = 'pointer';
-            btnCritical.title = inspectionFiltersActive ? 'Click to isolate Past Due bridges' : 'Click to isolate Critical bridges';
-            btnCritical.style.opacity = countCategoryState.critical ? '1.0' : '0.5';
-        } else {
-            btnCritical.style.opacity = '0.3';
-            btnCritical.style.cursor = 'not-allowed';
-            btnCritical.disabled = true;
-        }
-    }
-    if (btnEmergent) {
-        if (maxCounts.emergent > 0) {
-            btnEmergent.disabled = false;
-            btnEmergent.style.cursor = 'pointer';
-            btnEmergent.title = inspectionFiltersActive ? 'Click to isolate Upcoming bridges' : 'Click to isolate Emergent bridges';
-            btnEmergent.style.opacity = countCategoryState.emergent ? '1.0' : '0.5';
-        } else {
-            btnEmergent.style.opacity = '0.3';
-            btnEmergent.style.cursor = 'not-allowed';
-            btnEmergent.disabled = true;
-        }
-    }
-    if (btnCompleted) {
-        if (maxCounts.completed > 0) {
-            btnCompleted.disabled = false;
-            btnCompleted.style.cursor = 'pointer';
-            btnCompleted.title = 'Click to isolate Completed bridges';
-            btnCompleted.style.opacity = countCategoryState.completed ? '1.0' : '0.5';
-        } else {
-            btnCompleted.style.opacity = '0.3';
-            btnCompleted.style.cursor = 'not-allowed';
-            btnCompleted.disabled = true;
-        }
-    }
-    if (btnSatisfactory) {
-        if (maxCounts.satisfactory > 0) {
-            btnSatisfactory.disabled = false;
-            btnSatisfactory.style.cursor = 'pointer';
-            btnSatisfactory.title = inspectionFiltersActive ? 'Click to isolate Completed bridges' : 'Click to isolate Satisfactory bridges';
-            btnSatisfactory.style.opacity = countCategoryState.satisfactory ? '1.0' : '0.5';
-        } else {
-            btnSatisfactory.style.opacity = '0.3';
-            btnSatisfactory.style.cursor = 'not-allowed';
-            btnSatisfactory.disabled = true;
-        }
-    }
-
-    // N/A button — always present
-    if (btnNA) {
-        if (maxCounts.na > 0) {
-            btnNA.disabled = false;
-            btnNA.style.cursor = 'pointer';
-            btnNA.title = 'Click to isolate N/A bridges';
-            btnNA.style.opacity = countCategoryState.na ? '1.0' : '0.5';
-        } else {
-            btnNA.style.opacity = '0.3';
-            btnNA.style.cursor = 'not-allowed';
-            btnNA.disabled = true;
-        }
-    }
-
-    // HUB Data button — always clickable, cycles through 3 modes (off/rings/theme)
     if (btnHubdata) {
         btnHubdata.disabled = false;
         btnHubdata.style.cursor = 'pointer';
@@ -4949,7 +5222,7 @@ function updateCountReport() {
         styleCRHubButton();
     }
 
-    // Total button always available
+    // Total button
     const btnTotal = document.getElementById('btn-total');
     if (btnTotal) {
         btnTotal.disabled = false;
@@ -4958,88 +5231,31 @@ function updateCountReport() {
         btnTotal.style.opacity = '1';
     }
 
-    // Update button border styles
-    updateButtonStyles();
+    // Update both-mode button styles
+    updateBothButtonStyles();
 
-    // Show/hide the CR box
+    // Show the dCR unless user manually closed it
     const countReport = document.getElementById('countReport');
-    if (targetMode === 'both') {
-        // Both mode: show on load unless user manually closed
-        if (!crManuallyHidden && maxCounts.total > 0 && countReport.style.display !== 'block') {
-            countReport.style.display = 'block';
-            const header = document.getElementById('countReportHeader');
-            if (header && !countReport.dataset.draggable) {
-                makeDraggable(countReport, header);
-                countReport.dataset.draggable = 'true';
-            }
-            positionCountReportOutsideBridges();
-        }
-    } else if (filtersEngaged && maxCounts.total > 0 && countReport.style.display !== 'block') {
+    if (!crManuallyHidden && maxCounts.total > 0 && countReport.style.display !== 'block') {
         countReport.style.display = 'block';
-        const header = document.getElementById('countReportHeader');
-        if (header && !countReport.dataset.draggable) {
-            makeDraggable(countReport, header);
-            countReport.dataset.draggable = 'true';
-        }
-        positionCountReportOutsideBridges();
-    } else if (!filtersEngaged && targetMode !== 'both' && countReport.style.display === 'block') {
-        closeCountReport();
     }
 }
 
-// Position count report outside visible bridge bounding box
+// CR is now fixed-position bottom-right — no dynamic positioning needed
 function positionCountReportOutsideBridges() {
-    const countReport = document.getElementById('countReport');
-    if (!countReport) return;
-
-    // Align CR bottom with Districts box bottom, 10px gap to its left
-    const legend = document.querySelector('.legend');
-    if (!legend) return;
-
-    const legendRect = legend.getBoundingClientRect();
-    const mapRect = map.getContainer().getBoundingClientRect();
-
-    // Match CR height to legend height
-    const legendHeight = legendRect.height;
-    countReport.style.height = legendHeight + 'px';
-    countReport.style.overflow = 'hidden';
-
-    // CR is position:absolute inside the map container
-    // Bottom-align: CR bottom = legend bottom (relative to map container)
-    const legendBottom = legendRect.bottom - mapRect.top;
-    const crWidth = 240;
-    const top = legendBottom - legendHeight;
-    const left = legendRect.left - mapRect.left - crWidth - 10; // 10px gap
-
-    countReport.style.top = Math.max(10, top) + 'px';
-    countReport.style.left = Math.max(10, left) + 'px';
-    countReport.style.transform = 'none';
+    // No-op: CR uses position:fixed bottom:20px right:20px in CSS
 }
-
-// Re-home CR beside districts box on window resize
-window.addEventListener('resize', function() {
-    const countReport = document.getElementById('countReport');
-    if (countReport && countReport.style.display === 'block') {
-        positionCountReportOutsideBridges();
-    }
-});
 
 // Update button visual states
 function updateButtonStyles() {
+    // Only shared/single-mode buttons — both-mode buttons handled by updateBothButtonStyles()
     const buttons = [
         { id: 'btn-critical',          key: 'critical',     color: '#dc2626' },
         { id: 'btn-emergent',          key: 'emergent',     color: '#F97316' },
         { id: 'btn-completed',         key: 'completed',    color: '#10B981' },
         { id: 'btn-satisfactory',      key: 'satisfactory', color: '#10b981' },
-        { id: 'btn-na',                key: 'na',           color: '#6b7280' },
+        { id: 'btn-na',                key: 'na',           color: '#6b7280' }
         // btn-hubdata styled separately by styleCRHubButton() based on hubDataMode
-        // Both-mode buttons
-        { id: 'btn-maint-critical',    key: 'critical',     color: '#dc2626' },
-        { id: 'btn-maint-emergent',    key: 'emergent',     color: '#F97316' },
-        { id: 'btn-maint-satisfactory',key: 'satisfactory', color: '#10b981' },
-        { id: 'btn-insp-critical',     key: 'critical',     color: '#dc2626' },
-        { id: 'btn-insp-emergent',     key: 'emergent',     color: '#F97316' },
-        { id: 'btn-insp-satisfactory', key: 'satisfactory', color: '#10B981' }
     ];
 
     buttons.forEach(({ id, key, color }) => {
@@ -5056,17 +5272,15 @@ function updateButtonStyles() {
     }
 }
 
-// Toggle category visibility
+// Toggle category visibility (N/A, Total — shared buttons in dCR)
 window.toggleCountCategory = function(category) {
     // Close the category detail table popup if open
     const catPopup = document.getElementById('category-table-popup');
     if (catPopup) catPopup.remove();
 
-    const hasCondition = hasConditionSlidersActive();
-    // HUB Data, N/A, and Total buttons always accessible; condition buttons require sliders
-    if (category !== 'hubdata' && category !== 'na' && category !== 'total') {
-        if (!hasCondition && !evaluationActive && !(typeof attributesFilterState !== 'undefined' && attributesFilterState.active)) return;
-    }
+    // Clear any both-mode section isolation when using shared buttons
+    bothActiveSection = null;
+    bothActiveCategory = null;
 
     if (category === 'total') {
         // Total: Show all except N/A and hubdata
@@ -5138,6 +5352,7 @@ window.toggleCountCategory = function(category) {
     updateBridgeSizes();
     applyCountCategoryFilter();
     updateButtonStyles();
+    updateBothButtonStyles();  // Reset both-mode button visuals (cleared above)
     updateProjectRings();
     syncHubButton();
 
@@ -5145,6 +5360,249 @@ window.toggleCountCategory = function(category) {
     setTimeout(autoZoomToFilteredBridges, 100);
     updateUrlHash();
 };
+
+// Toggle a both-mode (dCR) category button — independent maint/insp sections
+window.toggleBothCategory = function(section, category) {
+    // Close any open detail table popup
+    const catPopup = document.getElementById('category-table-popup');
+    if (catPopup) catPopup.remove();
+
+    // Reset shared countCategoryState to defaults (clear any N/A/Total/HUB isolation)
+    countCategoryState.critical = true;
+    countCategoryState.emergent = true;
+    countCategoryState.satisfactory = true;
+    countCategoryState.completed = true;
+    countCategoryState.na = false;
+    countCategoryState.hubdata = false;
+    countCategoryState.total = true;
+    Object.keys(categoryClickState).forEach(k => categoryClickState[k] = 0);
+
+    if (bothActiveSection === section && bothActiveCategory === category) {
+        // Second click on same button — deselect, show all
+        bothActiveSection = null;
+        bothActiveCategory = null;
+    } else {
+        bothActiveSection = section;
+        bothActiveCategory = category;
+    }
+
+    applyBothCategoryFilter();
+    updateBothButtonStyles();
+    updateButtonStyles();  // Reset shared button visuals (N/A, Total)
+    updateProjectRings();
+    setTimeout(autoZoomToFilteredBridges, 100);
+    updateUrlHash();
+
+    // Sync RE with CR: switch RE mode and category to match
+    if (reportPanelOpen && bothActiveSection && bothActiveCategory) {
+        const newMode = (bothActiveSection === 'insp') ? 'inspection' : 'maintenance';
+        if (reportViewMode !== newMode) {
+            reportViewMode = newMode;
+            renderReportModeBar();
+            buildReportCategoryButtons();
+        }
+        reportCategory = bothActiveCategory;
+        buildReportBridgeList(reportCategory);
+        reportCurrentIndex = 0;
+        updateReportCategoryButtonStates();
+        removeReportHighlight();
+        if (reportBridgeList.length > 0) {
+            renderReportDetail(reportBridgeList[0]);
+        } else {
+            document.getElementById('reportDetail').innerHTML = '<div style="color:#999;text-align:center;padding:20px;">No bridges in this category.</div>';
+            document.getElementById('reportTitleBox').innerHTML = '';
+        }
+        updateReportNav();
+        renderReportBridgeList();
+        applyReportCategoryFilter();
+        updateReStatusBar();
+    } else if (reportPanelOpen && !bothActiveSection) {
+        // CR deselected — switch RE to total
+        reportCategory = 'total';
+        buildReportBridgeList('total');
+        reportCurrentIndex = 0;
+        updateReportCategoryButtonStates();
+        removeReportHighlight();
+        if (reportBridgeList.length > 0) {
+            renderReportDetail(reportBridgeList[0]);
+        }
+        updateReportNav();
+        renderReportBridgeList();
+        applyReportCategoryFilter();
+        updateReStatusBar();
+    }
+};
+
+// Apply filtering for both-mode category isolation
+function applyBothCategoryFilter() {
+    if (!bothActiveSection || !bothActiveCategory) {
+        // No isolation — restore normal display
+        updateBridgeSizes();
+        return;
+    }
+
+    const baseSize = getPointSize();
+    const toShow = [];
+
+    Object.entries(bridgeLayers).forEach(([bars, marker]) => {
+        const bridge = marker.bridgeData;
+        if (!bridge) return;
+
+        // Respect district filter
+        if (!activeDistricts[bridge.district]) {
+            if (marker._map) marker.remove();
+            return;
+        }
+
+        // Respect search filter
+        if (currentSearchQuery.length > 0) {
+            const barsUpper = (bridge.bars_number || '').toUpperCase();
+            const name = (bridge.bridge_name || '').toUpperCase();
+            const isNumericSearch = /^\d/.test(currentSearchQuery);
+            const matchesBars = isNumericSearch ? barsUpper.startsWith(currentSearchQuery) : barsUpper.includes(currentSearchQuery);
+            const matchesName = isNumericSearch ? name.startsWith(currentSearchQuery) : name.includes(currentSearchQuery);
+            if (!matchesBars && !matchesName) {
+                if (marker._map) marker.remove();
+                return;
+            }
+        }
+
+        // Respect attributes filter
+        if (typeof attributesFilterState !== 'undefined' && attributesFilterState.active) {
+            if (!bridgePassesAttributesFilter(bridge)) {
+                if (marker._map) marker.remove();
+                return;
+            }
+        }
+
+        // Respect box exclusion
+        if (boxExcludedBars.has(bars)) {
+            if (marker._map) marker.remove();
+            return;
+        }
+
+        // Respect sufficiency filter
+        if (sliderValues.sufficiency < 100) {
+            const calcSuff = getSufficiencyRating(bridge);
+            if (calcSuff == null) { if (marker._map) marker.remove(); return; }
+            const suffThreshold = sliderValues.sufficiency / 100 * 9;
+            if (sufficiencyMode === 'lte') {
+                if (calcSuff > suffThreshold) { if (marker._map) marker.remove(); return; }
+            } else {
+                if (calcSuff < suffThreshold) { if (marker._map) marker.remove(); return; }
+            }
+        }
+
+        // Categorize using the correct section logic
+        let cat;
+        if (bothActiveSection === 'insp') {
+            cat = getInspectionCategoryForBridge(bridge);
+        } else {
+            cat = getMaintenanceCategoryForBridge(bridge);
+        }
+
+        // 'total' means show all non-N/A bridges; otherwise match exact category
+        const matchesCategory = bothActiveCategory === 'total' ? (cat !== 'na') : (cat === bothActiveCategory);
+
+        if (matchesCategory) {
+            let color, zPriority;
+
+            if (bothActiveSection === 'insp') {
+                // Inspection theme: gradient HSL colors from getInspectionColor
+                color = getInspectionColor(bridge);
+                // Skip N/A grey bridges
+                if (color === '#888') {
+                    if (marker._map) marker.remove();
+                    return;
+                }
+                // z-priority: past due (red) on top, upcoming (orange) middle, completed (green) bottom
+                if (color.startsWith('hsl(0')) zPriority = 2;       // past due reds
+                else if (color.startsWith('hsl(')) zPriority = 1;   // upcoming oranges
+                else zPriority = 0;                                  // completed greens
+            } else {
+                // Maintenance theme: condition colors (respects sliders when active)
+                color = evaluationActive ? getEvaluationColor(bridge) : getWorstConditionColor(bridge);
+                // Skip grey (N/A) bridges in maintenance isolation
+                if (color === '#6b7280') {
+                    if (marker._map) marker.remove();
+                    return;
+                }
+                // z-priority: worst condition on top
+                const ratings = [bridge.deck_rating, bridge.superstructure_rating,
+                    bridge.substructure_rating, bridge.bearings_rating, bridge.joints_rating]
+                    .filter(r => typeof r === 'number' && !isNaN(r) && r >= 1 && r <= 9);
+                zPriority = ratings.length > 0 ? 10 - Math.min(...ratings) : 0;
+            }
+
+            toShow.push({ marker, bridge, color, zPriority });
+        } else {
+            if (marker._map) marker.remove();
+        }
+    });
+
+    // Sort so worst bridges render on top
+    toShow.sort((a, b) => a.zPriority - b.zPriority);
+
+    toShow.forEach(({ marker, bridge, color }) => {
+        let size;
+        if (bothActiveSection === 'insp') {
+            // Inspection theme: uniform size (no evaluation sizing)
+            size = baseSize;
+        } else {
+            // Maintenance theme: evaluation sizing when sliders active
+            size = evaluationActive ? getEvaluationSize(bridge, baseSize) : baseSize;
+        }
+        marker.setRadius(size);
+        marker.setStyle({ fillColor: color, fillOpacity: 1, opacity: 1 });
+        if (!marker._map) marker.addTo(map);
+        marker.bringToFront();
+    });
+}
+
+// Update button styles for both-mode — only highlight the active section/category
+function updateBothButtonStyles() {
+    const colors = { critical: '#dc2626', emergent: '#F97316', satisfactory: '#10b981' };
+
+    ['critical', 'emergent', 'satisfactory'].forEach(cat => {
+        const maintBtn = document.getElementById('btn-maint-' + cat);
+        if (maintBtn) {
+            const isActive = (bothActiveSection === 'maint' && (bothActiveCategory === cat || bothActiveCategory === 'total'));
+            maintBtn.style.borderColor = isActive ? colors[cat] : 'rgba(255,255,255,0.2)';
+            maintBtn.style.opacity = '1';
+        }
+
+        const inspBtn = document.getElementById('btn-insp-' + cat);
+        if (inspBtn) {
+            const isActive = (bothActiveSection === 'insp' && (bothActiveCategory === cat || bothActiveCategory === 'total'));
+            inspBtn.style.borderColor = isActive ? colors[cat] : 'rgba(255,255,255,0.2)';
+            inspBtn.style.opacity = '1';
+        }
+    });
+
+    // Section total buttons
+    const btnMaintTotal = document.getElementById('btn-maint-total');
+    if (btnMaintTotal) {
+        const isActive = (bothActiveSection === 'maint' && bothActiveCategory === 'total');
+        btnMaintTotal.style.borderColor = isActive ? '#FFB81C' : 'rgba(255,184,28,0.4)';
+        btnMaintTotal.style.background = isActive ? 'rgba(255,184,28,0.15)' : 'rgba(0, 40, 85, 0.5)';
+    }
+    const btnInspTotal = document.getElementById('btn-insp-total');
+    if (btnInspTotal) {
+        const isActive = (bothActiveSection === 'insp' && bothActiveCategory === 'total');
+        btnInspTotal.style.borderColor = isActive ? '#FFB81C' : 'rgba(255,184,28,0.4)';
+        btnInspTotal.style.background = isActive ? 'rgba(255,184,28,0.15)' : 'rgba(0, 40, 85, 0.5)';
+    }
+
+    // N/A and bottom Total buttons
+    const btnNA = document.getElementById('btn-na');
+    if (btnNA) {
+        btnNA.style.borderColor = 'rgba(255,255,255,0.2)';
+    }
+    const btnTotal = document.getElementById('btn-total');
+    if (btnTotal) {
+        btnTotal.style.background = (!bothActiveSection) ? 'rgba(0, 40, 85, 0.5)' : 'rgba(0, 40, 85, 0.3)';
+    }
+}
 
 // Sync Hub Button (projectToggle) state based on CRHUB isolation
 function syncHubButton() {
@@ -5415,19 +5873,7 @@ window.closeCountReport = function() {
 // ========================================
 
 function positionProjectToggle() {
-    const legend = document.querySelector('.legend');
-    const btn = document.getElementById('projectToggle');
-    if (!legend || !btn) return;
-
-    const legendRect = legend.getBoundingClientRect();
-    const mapRect = document.getElementById('map').getBoundingClientRect();
-
-    // Match width to legend
-    btn.style.width = legendRect.width + 'px';
-    // Position 10px above the legend, aligned right
-    btn.style.bottom = (mapRect.bottom - legendRect.top + 10) + 'px';
-    // Show button now that it's positioned
-    btn.style.display = 'block';
+    // No-op: HUB DATA button is now in the CR, old standalone button hidden
 }
 
 function createProjectRings() {
@@ -5594,11 +6040,11 @@ const tourSteps = [
         onEnter: null,
         onExit: null
     },
-    // Step 2: District Legend — tooltip to the left of the legend box
+    // Step 2: District Drawer — tooltip to the left of the CR
     {
-        target: '.legend',
-        title: 'District Legend',
-        text: 'Each district has its own color. Click any district name to toggle its bridges on or off. Use the "All Off" button to hide everything, then selectively enable districts you want to focus on.',
+        target: '#crDistrictTab',
+        title: 'Districts',
+        text: 'Click this tab to open the Districts drawer. Click any district to solo it — only that district\'s bridges will show and the map will zoom to it. Click the district again to show all.',
         position: 'left',
         onEnter: null,
         onExit: null
@@ -5911,7 +6357,7 @@ const tourSteps = [
     {
         target: '#eval-sliders-wrapper',
         title: 'Try It \u2014 Bad Joints, Good Bridges',
-        text: 'Let\'s find an interesting set of bridges: ones with bad joints but an otherwise good sufficiency rating.\n\nWe\'ve set the Joints slider to 80% and Calc. Sufficiency to 75% in \u2265 mode \u2014 meaning bridges scoring 75 or higher overall, but with joint problems.\n\nThe map now highlights these bridges. Check the Count Report that just appeared!',
+        text: 'Let\'s find an interesting set of bridges: ones with bad joints but an otherwise good sufficiency rating.\n\nWe\'ve set the Joints slider to 80% and Calc. Sufficiency to 75% in \u2265 mode \u2014 meaning bridges scoring 75 or higher overall, but with joint problems.\n\nTry dragging the sliders yourself to see how the map changes. The Count Report on the right shows the results!',
         position: 'right',
         onEnter: function() {
             const condPanel = document.getElementById('evaluationPanel');
@@ -5938,8 +6384,28 @@ const tourSteps = [
             evaluationActive = true;
             currentMode = 'evaluation';
             updateBridgeSizes();
+            setTimeout(autoZoomToFilteredBridges, 150);
+
+            // Raise CF panel above overlay so sliders are interactive
+            condPanel.style.zIndex = '12000';
+
+            // Hide tour overlay so map is visible alongside sliders
+            const tourOverlay = document.getElementById('tour-overlay');
+            if (tourOverlay) tourOverlay.style.display = 'none';
+            const tourSpotlight = document.getElementById('tour-spotlight');
+            if (tourSpotlight) tourSpotlight.style.display = 'none';
         },
-        onExit: null
+        onExit: function() {
+            // Restore CF panel z-index
+            const condPanel = document.getElementById('evaluationPanel');
+            condPanel.style.zIndex = '';
+
+            // Restore tour overlay
+            const tourOverlay = document.getElementById('tour-overlay');
+            if (tourOverlay) tourOverlay.style.display = '';
+            const tourSpotlight = document.getElementById('tour-spotlight');
+            if (tourSpotlight) tourSpotlight.style.display = '';
+        }
     },
     // Step 10: Count Report — shows the exercise results, interactive
     {
@@ -7308,6 +7774,7 @@ window.resetHubFilter = function() {
 
 // HUB panel toggle
 window.toggleHubPanel = function() {
+    closeReportExplorerIfOpen();
     const hubPanel = document.getElementById('hubPanel');
     const attrPanel = document.getElementById('attributesPanel');
     const condPanel = document.getElementById('evaluationPanel');
@@ -7334,6 +7801,7 @@ window.toggleHubPanel = function() {
         updateBridgeSizes();
     }
     updateUrlHash();
+    centerStatusBars();
 };
 
 // ==================== SHAREABLE LINK SYSTEM ====================
@@ -7587,7 +8055,7 @@ function buildCrReportText() {
     const rows = isMaint ? window._maintTableRows : window._categoryTableRows;
     const label = isMaint
         ? (window._maintTableLabel || window._maintTableCategory || 'Report')
-        : (categoryLabels[window._categoryTableCategory] || window._categoryTableCategory || 'Report');
+        : (window._categoryTableCategory ? getInspectionTableTitle(window._categoryTableCategory) : 'Report');
 
     if (!rows || rows.length === 0) return { subject: 'SpanBase Report', body: 'No data available.' };
 
@@ -7827,6 +8295,1615 @@ function openRadialShare(btn, bridge) {
     });
 }
 
+// ==================== REPORT MODE ====================
+
+function toggleReportsPanel() {
+    const panel = document.getElementById('reportsPanel');
+    if (!panel) return;
+
+    if (reportPanelOpen) {
+        // Close
+        panel.classList.remove('open', 'ontop');
+        reportPanelOpen = false;
+        removeReportHighlight();
+        reportBarsSet = null;
+        // Clear condition rating filters
+        reportConditionFilters = {};
+        reportSufficiencyFilter = null;
+        // Restore bridge visibility to normal
+        updateBridgeVisibility();
+        updateReStatusBar();
+    } else {
+        // Open
+        panel.classList.add('open', 'ontop');
+        reportPanelOpen = true;
+        // Detect context: if came from inspection mode, default to inspection view
+        if (inspectionFiltersActive || currentMode === 'inspection' || bothActiveSection === 'insp') {
+            reportViewMode = 'inspection';
+        } else {
+            reportViewMode = 'maintenance';
+        }
+        // Reset map mode to Pan+Zoom on fresh open
+        reportMapMode = 'panZoom';
+        // Build mode bar, category buttons + load default category
+        renderReportModeBar();
+        buildReportCategoryButtons();
+        buildReportBridgeList(reportCategory);
+        if (reportBridgeList.length > 0) {
+            reportCurrentIndex = 0;
+            renderReportDetail(reportBridgeList[0]);
+        }
+        updateReportNav();
+        renderReportBridgeList();
+        // Sync CR and apply category filter
+        syncCRWithReCategory(reportCategory);
+        applyReportCategoryFilter();
+        // Autozoom to bounding box of filtered bridges
+        setTimeout(autoZoomToFilteredBridges, 100);
+        updateReStatusBar();
+        // Auto-launch RE tutorial on first open this session
+        if (!reTourShownThisSession) {
+            reTourShownThisSession = true;
+            setTimeout(function() { startReTour(); }, 400);
+        }
+    }
+}
+
+// Open report panel focused on a specific bridge (from radial menu)
+function openBridgeReport(bridge) {
+    const panel = document.getElementById('reportsPanel');
+    if (!panel) return;
+
+    // Close radial menu since we're transitioning to report mode
+    closeAllMenus();
+
+    // Open the panel if not already open
+    if (!reportPanelOpen) {
+        panel.classList.add('open', 'ontop');
+        reportPanelOpen = true;
+        // Detect context
+        if (inspectionFiltersActive || currentMode === 'inspection' || bothActiveSection === 'insp') {
+            reportViewMode = 'inspection';
+        } else {
+            reportViewMode = 'maintenance';
+        }
+        renderReportModeBar();
+        buildReportCategoryButtons();
+    }
+
+    // Set category to 'total' to ensure the bridge is in the list
+    reportCategory = 'total';
+    buildReportBridgeList('total');
+    updateReportCategoryButtonStates();
+
+    // Find the bridge in the list
+    const idx = reportBridgeList.findIndex(b => b.bars_number === bridge.bars_number);
+    if (idx >= 0) {
+        reportCurrentIndex = idx;
+    } else {
+        // Bridge not in filtered list (shouldn't happen with 'total'), add it and go
+        reportBridgeList.unshift(bridge);
+        reportCurrentIndex = 0;
+    }
+
+    renderReportDetail(reportBridgeList[reportCurrentIndex]);
+    updateReportNav();
+    renderReportBridgeList();
+    highlightReportBridge(reportBridgeList[reportCurrentIndex]);
+    syncCRWithReCategory(reportCategory);
+    applyReportCategoryFilter();
+    updateReStatusBar();
+}
+
+function buildReportCategoryButtons() {
+    const bar = document.getElementById('reportCategoryBar');
+    if (!bar) return;
+
+    const isMaint = reportViewMode === 'maintenance';
+    const categories = isMaint ? [
+        { key: 'total',         label: 'Total',         color: '#FFB81C' },
+        { key: 'critical',      label: 'Critical',      color: '#dc2626' },
+        { key: 'emergent',      label: 'Emergent',      color: '#F97316' },
+        { key: 'satisfactory',  label: 'Satisfactory',  color: '#10B981' },
+        { key: 'na',            label: 'N/A',           color: '#6b7280' },
+        { key: 'hubdata',       label: 'HUB',           color: '#22c55e' }
+    ] : [
+        { key: 'total',         label: 'Total',         color: '#FFB81C' },
+        { key: 'critical',      label: 'Past Due',      color: '#dc2626' },
+        { key: 'emergent',      label: 'Upcoming',      color: '#F97316' },
+        { key: 'satisfactory',  label: 'Completed',     color: '#10B981' },
+        { key: 'na',            label: 'N/A',           color: '#6b7280' },
+        { key: 'hubdata',       label: 'HUB',           color: '#22c55e' }
+    ];
+
+    bar.innerHTML = categories.map(c => {
+        const active = reportCategory === c.key;
+        return `<button class="report-cat-btn" data-cat="${c.key}" onclick="switchReportCategory('${c.key}')"
+            style="padding:3px 8px; font-size:8pt; font-weight:600; border-radius:4px; cursor:pointer;
+            border:1px solid ${c.color}; color:${active ? '#fff' : '#fff'};
+            background:${active ? c.color : c.color + '44'}; transition:all 0.15s;
+            ${active ? 'box-shadow:0 0 6px ' + c.color + '80;' : ''}">
+            ${c.label}</button>`;
+    }).join('');
+}
+
+function updateReportCategoryButtonStates() {
+    document.querySelectorAll('.report-cat-btn').forEach(btn => {
+        const cat = btn.getAttribute('data-cat');
+        const colors = { total:'#FFB81C', critical:'#dc2626', emergent:'#F97316', satisfactory:'#10B981', na:'#6b7280', hubdata:'#22c55e' };
+        const c = colors[cat] || '#FFB81C';
+        const active = reportCategory === cat;
+        btn.style.color = '#fff';
+        btn.style.background = active ? c : c + '44';
+        btn.style.boxShadow = active ? '0 0 6px ' + c + '80' : 'none';
+    });
+}
+
+function switchReportCategory(category) {
+    reportCategory = category;
+    // Clear condition locks before rebuilding list so old locks don't carry over
+    reportConditionFilters = {};
+    reportSufficiencyFilter = null;
+    buildReportBridgeList(category);
+    reportCurrentIndex = 0;
+    updateReportCategoryButtonStates();
+
+    // Sync CR to match RE category
+    syncCRWithReCategory(category);
+
+    removeReportHighlight();
+    if (reportBridgeList.length > 0) {
+        renderReportDetail(reportBridgeList[0]);
+    } else {
+        document.getElementById('reportDetail').innerHTML = '<div style="color:#999;text-align:center;padding:20px;">No bridges in this category.</div>';
+        document.getElementById('reportTitleBox').innerHTML = '';
+    }
+    updateReportNav();
+    renderReportBridgeList();
+
+    // When a category is fully engaged, apply hard filter (only show those bridges)
+    applyReportCategoryFilter();
+    updateReStatusBar();
+}
+
+function getWorstInspectionDays(bridge, today) {
+    const inspections = inspectionsData[bridge.bars_number];
+    if (!inspections || inspections.length === 0) return -Infinity;
+    let worstDays = -Infinity;
+    inspections.forEach(insp => {
+        const due = parseDateString(insp.due);
+        if (!due) return;
+        const days = Math.floor((today - due) / 86400000);
+        if (days > worstDays) worstDays = days;
+    });
+    return worstDays;
+}
+
+function buildReportBridgeList(category) {
+    reportBridgeList = [];
+
+    Object.entries(bridgeLayers).forEach(([bars, layer]) => {
+        const bridge = layer.bridgeData;
+        if (!bridge) return;
+
+        // Apply all active filters: district
+        if (!activeDistricts[bridge.district]) return;
+
+        // Search filter
+        if (currentSearchQuery) {
+            const q = currentSearchQuery.toLowerCase();
+            const name = (bridge.bridge_name || '').toLowerCase();
+            const barsLower = bars.toLowerCase();
+            const route = (bridge.route || '').toLowerCase();
+            if (!name.includes(q) && !barsLower.includes(q) && !route.includes(q)) return;
+        }
+
+        // Box exclusion
+        if (boxExcludedBars.has(bars)) return;
+
+        // Sufficiency filter
+        if (typeof sliderValues !== 'undefined' && sliderValues.sufficiency !== undefined && sliderValues.sufficiency > 0) {
+            const suf = sufficiencyData[bars];
+            if (suf !== undefined) {
+                if (sufficiencyMode === 'lte' && suf >= sliderValues.sufficiency) return;
+                if (sufficiencyMode === 'gte' && suf <= sliderValues.sufficiency) return;
+            }
+        }
+
+        // Category filter — use inspection or maintenance categories based on view mode
+        if (category === 'total') {
+            // Include all that pass filters
+        } else if (category === 'hubdata') {
+            if (!projectsData[bars] && !hubData[bars]) return;
+        } else if (reportViewMode === 'inspection') {
+            if (getInspectionCategoryForBridge(bridge) !== category) return;
+        } else {
+            if (getBridgeCategory(bridge) !== category) return;
+        }
+
+        // Condition lock filters (only in maintenance mode)
+        if (reportViewMode === 'maintenance') {
+            for (const [field, val] of Object.entries(reportConditionFilters)) {
+                if (String(bridge[field]) !== String(val)) return;
+            }
+            if (reportSufficiencyFilter !== null) {
+                const suf = sufficiencyData[bars];
+                if (suf === undefined) return;
+                if (suf < reportSufficiencyFilter - 10 || suf > reportSufficiencyFilter + 10) return;
+            }
+        }
+
+        reportBridgeList.push(bridge);
+    });
+
+    // Sort to match CR table order: district ascending, then days descending (worst first)
+    const today = new Date();
+    reportBridgeList.sort((a, b) => {
+        // District number comparison
+        const dA = parseInt((a.district || '').replace(/\D/g, '')) || 0;
+        const dB = parseInt((b.district || '').replace(/\D/g, '')) || 0;
+        if (dA !== dB) return dA - dB;
+        // In inspection mode, sort by worst days descending; else bridge name
+        if (reportViewMode === 'inspection') {
+            const daysA = getWorstInspectionDays(a, today);
+            const daysB = getWorstInspectionDays(b, today);
+            return daysB - daysA;
+        }
+        return (a.bridge_name || '').localeCompare(b.bridge_name || '');
+    });
+
+    // Update BARS lookup set
+    reportBarsSet = new Set(reportBridgeList.map(b => b.bars_number));
+}
+
+function renderReportModeBar() {
+    const bar = document.getElementById('reportModeBar');
+    if (!bar) return;
+    const isMaint = reportViewMode === 'maintenance';
+    const activeBg = '#8B0000';
+    const activeColor = '#fff';
+    const inactiveBg = 'rgba(30,64,175,0.25)';
+    const inactiveColor = 'rgba(255,255,255,0.5)';
+    const maintBg = isMaint ? activeBg : inactiveBg;
+    const maintColor = isMaint ? activeColor : inactiveColor;
+    const inspBg = !isMaint ? activeBg : inactiveBg;
+    const inspColor = !isMaint ? activeColor : inactiveColor;
+    bar.innerHTML = `
+        <div style="display:flex; gap:0; margin-bottom:8px; border-radius:5px; overflow:hidden; border:1px solid rgba(255,255,255,0.4);">
+            <div onclick="if(reportViewMode!=='maintenance'){toggleReportViewMode();}"
+                style="flex:1; background:${maintBg}; color:${maintColor}; text-align:center; font-size:9pt; font-weight:700; padding:6px 8px; cursor:pointer; letter-spacing:0.5px; transition:all 0.2s; user-select:none;"
+                data-tip="Switch to Maintenance mode"
+                onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+                Maintenance
+            </div>
+            <div onclick="if(reportViewMode!=='inspection'){toggleReportViewMode();}"
+                style="flex:1; background:${inspBg}; color:${inspColor}; text-align:center; font-size:9pt; font-weight:700; padding:6px 8px; cursor:pointer; letter-spacing:0.5px; transition:all 0.2s; user-select:none; border-left:1px solid rgba(255,255,255,0.4);"
+                data-tip="Switch to Inspection mode"
+                onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+                Inspection
+            </div>
+        </div>`;
+}
+
+window.toggleReportViewMode = function() {
+    reportViewMode = reportViewMode === 'maintenance' ? 'inspection' : 'maintenance';
+
+    // Clear CR category isolation so bridge visibility agrees with the new mode
+    if (bothActiveSection || bothActiveCategory) {
+        bothActiveSection = null;
+        bothActiveCategory = null;
+        applyBothCategoryFilter();
+        updateBothButtonStyles();
+        updateButtonStyles();
+    }
+
+    renderReportModeBar();
+    buildReportCategoryButtons();
+    buildReportBridgeList(reportCategory);
+    reportCurrentIndex = 0;
+    removeReportHighlight();
+    if (reportBridgeList.length > 0) {
+        renderReportDetail(reportBridgeList[0]);
+    } else {
+        document.getElementById('reportDetail').innerHTML = '';
+        document.getElementById('reportTitleBox').innerHTML = '';
+    }
+    updateReportNav();
+    renderReportBridgeList();
+    syncCRWithReCategory(reportCategory);
+    applyReportCategoryFilter();
+    updateReStatusBar();
+};
+
+function updateReportNav() {
+    // Nav is now part of the title box — just re-render the title box
+    renderReportTitleBox();
+}
+
+function renderReportTitleBox() {
+    const box = document.getElementById('reportTitleBox');
+    if (!box) return;
+    if (reportBridgeList.length === 0) {
+        box.innerHTML = '<div style="padding:8px; text-align:center; color:rgba(255,255,255,0.5); font-size:9pt;">No bridges in this category</div>';
+        return;
+    }
+    const bridge = reportBridgeList[reportCurrentIndex];
+    const bridgeName = cleanBridgeName(bridge.bridge_name || 'Unknown');
+    const titleCase = bridgeName.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+    const modeIcons = { panZoom: 'Pan+Zoom', pan: 'Pan', off: 'Off' };
+    const modeLabel = modeIcons[reportMapMode];
+    const modeTip = 'Click to cycle: Pan+Zoom → Pan → Off';
+
+    box.innerHTML = `
+        <div style="margin-bottom:8px; padding:8px; background:rgba(0,59,92,0.5); border:1px solid rgba(255,184,28,0.3); border-radius:6px; text-align:center; display:flex; align-items:center; justify-content:space-between; gap:6px;">
+            <button onclick="reportPrevBridge()" style="background:rgba(255,184,28,0.15); border:1px solid #FFB81C; color:#FFB81C; border-radius:4px; cursor:pointer; font-size:12pt; font-weight:700; padding:4px 8px; line-height:1; flex-shrink:0; align-self:center;">&#9650;</button>
+            <div style="flex:1; min-width:0;">
+                <div style="font-size:10pt; font-weight:700; color:#FFB81C; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${titleCase}</div>
+                <div style="font-size:7pt; color:rgba(255,255,255,0.6); margin-top:3px; display:flex; justify-content:center; align-items:center; gap:6px;">
+                    <span style="color:#FFB81C;">${reportCurrentIndex + 1}</span>/<span style="color:#FFB81C;">${reportBridgeList.length}</span>
+                    <span style="color:rgba(255,255,255,0.25);">|</span>
+                    <a href="https://www.google.com/maps?q=${bridge.latitude},${bridge.longitude}" target="_blank" style="color:#FFB81C; text-decoration:none; font-size:7pt;">Google Maps</a>
+                    <span style="color:rgba(255,255,255,0.25);">|</span>
+                    <a href="${bridge.bars_hyperlink || '#'}" target="_blank" style="color:#FFB81C; text-decoration:none; font-size:7pt;">AssetWise</a>
+                    <span style="color:rgba(255,255,255,0.25);">|</span>
+                    <span onclick="cycleReportMapMode()" style="cursor:pointer; color:rgba(255,255,255,0.7); font-size:7pt; font-weight:600; background:rgba(255,255,255,0.08); padding:1px 4px; border-radius:3px;" data-tip="${modeTip}">${modeLabel}</span>
+                </div>
+            </div>
+            <button onclick="reportNextBridge()" style="background:rgba(255,184,28,0.15); border:1px solid #FFB81C; color:#FFB81C; border-radius:4px; cursor:pointer; font-size:12pt; font-weight:700; padding:4px 8px; line-height:1; flex-shrink:0; align-self:center;">&#9660;</button>
+        </div>`;
+}
+
+window.cycleReportMapMode = function() {
+    const modes = ['panZoom', 'pan', 'off'];
+    const idx = modes.indexOf(reportMapMode);
+    reportMapMode = modes[(idx + 1) % modes.length];
+    renderReportTitleBox();
+};
+
+function renderReportBridgeList() {
+    const box = document.getElementById('reportBridgeListBox');
+    if (!box) return;
+    if (reportBridgeList.length === 0) {
+        box.innerHTML = '';
+        return;
+    }
+
+    const isMaint = reportViewMode === 'maintenance';
+    const today = new Date();
+    const currentYear = today.getFullYear();
+    let rows = '';
+
+    reportBridgeList.forEach((b, i) => {
+        const name = cleanBridgeName(b.bridge_name || '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+        const dist = b.district ? b.district.replace('District ', 'D') : '';
+        const active = i === reportCurrentIndex;
+        const bg = active ? 'background:rgba(255,184,28,0.2);' : '';
+
+        if (isMaint) {
+            const nhs = b.nhs ? b.nhs : '—';
+            const adt = b.adt != null ? b.adt.toLocaleString() : '—';
+            const age = b.year_built ? (currentYear - b.year_built) : '—';
+
+            rows += `<div id="bl-row-${i}" onclick="reportGoToBridge(${i})" style="display:flex; align-items:center; gap:4px; padding:3px 4px; cursor:pointer; font-size:8pt; ${bg} border-bottom:1px solid rgba(255,255,255,0.06); transition:background 0.1s;" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='${active ? 'rgba(255,184,28,0.2)' : ''}'">
+                <span style="color:rgba(255,255,255,0.4); width:20px; text-align:right; flex-shrink:0;">${i + 1}</span>
+                <span style="color:rgba(255,255,255,0.5); width:18px; flex-shrink:0;">${dist}</span>
+                <span style="flex:1; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${name}</span>
+                <span style="color:rgba(255,255,255,0.5); width:24px; text-align:center; flex-shrink:0;">${nhs}</span>
+                <span style="color:rgba(255,255,255,0.5); width:40px; text-align:right; flex-shrink:0;">${adt}</span>
+                <span style="color:rgba(255,255,255,0.5); width:24px; text-align:right; flex-shrink:0;">${age}</span>
+            </div>`;
+        } else {
+            // Inspection mode: Type, Interval, Days (no Due column)
+            const inspections = inspectionsData[b.bars_number];
+            let type = '—', interval = '—', status = '—', statusColor = 'rgba(255,255,255,0.5)';
+            if (inspections && inspections.length > 0) {
+                // Find worst inspection
+                let worstInsp = null, worstDays = -Infinity;
+                inspections.forEach(insp => {
+                    const due = parseDateString(insp.due);
+                    if (!due) return;
+                    const days = Math.floor((today - due) / 86400000);
+                    if (days > worstDays) { worstDays = days; worstInsp = insp; }
+                });
+                if (worstInsp) {
+                    type = worstInsp.type || '—';
+                    interval = (worstInsp.interval || 24) + 'mo';
+                    if (worstDays > 0) {
+                        status = worstDays + 'd';
+                        statusColor = '#FCA5A5';
+                    } else if (worstDays > -60) {
+                        status = Math.abs(worstDays) + 'd';
+                        statusColor = '#FBBF24';
+                    } else {
+                        status = Math.abs(worstDays) + 'd';
+                        statusColor = '#6EE7B7';
+                    }
+                }
+            }
+
+            rows += `<div id="bl-row-${i}" onclick="reportGoToBridge(${i})" style="display:flex; align-items:center; gap:4px; padding:3px 4px; cursor:pointer; font-size:8pt; ${bg} border-bottom:1px solid rgba(255,255,255,0.06); transition:background 0.1s;" onmouseover="this.style.background='rgba(255,255,255,0.08)'" onmouseout="this.style.background='${active ? 'rgba(255,184,28,0.2)' : ''}'">
+                <span style="color:rgba(255,255,255,0.4); width:20px; text-align:right; flex-shrink:0;">${i + 1}</span>
+                <span style="color:rgba(255,255,255,0.5); width:18px; flex-shrink:0;">${dist}</span>
+                <span style="flex:1; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${name}</span>
+                <span style="color:rgba(255,255,255,0.5); width:42px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:0;">${type}</span>
+                <span style="color:rgba(255,255,255,0.5); width:28px; text-align:right; flex-shrink:0;">${interval}</span>
+                <span style="color:${statusColor}; width:42px; text-align:right; flex-shrink:0;">${status}</span>
+            </div>`;
+        }
+    });
+
+    // Column header — mode dependent
+    let header;
+    if (isMaint) {
+        header = `<div style="display:flex; align-items:center; gap:4px; padding:2px 4px; font-size:7pt; color:rgba(255,255,255,0.35); border-bottom:1px solid rgba(255,255,255,0.12); text-transform:uppercase; letter-spacing:0.5px;">
+            <span style="width:20px; text-align:right; flex-shrink:0;">#</span>
+            <span style="width:18px; flex-shrink:0;">D</span>
+            <span style="flex:1;">Name</span>
+            <span style="width:24px; text-align:center; flex-shrink:0;">NHS</span>
+            <span style="width:40px; text-align:right; flex-shrink:0;">ADT</span>
+            <span style="width:24px; text-align:right; flex-shrink:0;">Age</span>
+        </div>`;
+    } else {
+        const daysHeader = reportCategory === 'critical' ? 'Over' : reportCategory === 'emergent' ? 'Until' : reportCategory === 'satisfactory' ? 'Since' : 'Days';
+        header = `<div style="display:flex; align-items:center; gap:4px; padding:2px 4px; font-size:7pt; color:rgba(255,255,255,0.35); border-bottom:1px solid rgba(255,255,255,0.12); text-transform:uppercase; letter-spacing:0.5px;">
+            <span style="width:20px; text-align:right; flex-shrink:0;">#</span>
+            <span style="width:18px; flex-shrink:0;">D</span>
+            <span style="flex:1;">Name</span>
+            <span style="width:42px; flex-shrink:0;">Type</span>
+            <span style="width:28px; text-align:right; flex-shrink:0;">Intv</span>
+            <span style="width:42px; text-align:right; flex-shrink:0;">${daysHeader}</span>
+        </div>`;
+    }
+
+    // Build status-aware section header
+    const catLabels = isMaint
+        ? { total: 'All', critical: 'Critical', emergent: 'Emergent', satisfactory: 'Satisfactory', na: 'N/A', hubdata: 'HUB' }
+        : { total: 'All', critical: 'Past Due', emergent: 'Upcoming', satisfactory: 'Completed', na: 'N/A', hubdata: 'HUB' };
+    const catLabel = catLabels[reportCategory] || reportCategory;
+    const listType = isMaint ? 'Bridge List' : 'Inspection List';
+    const listTitle = `${catLabel} ${listType} (${reportBridgeList.length})`;
+
+    box.innerHTML = `
+        <div class="report-section" style="margin-bottom:6px;">
+            <div class="report-section-header" onclick="toggleReportSection(this)">
+                <span class="report-arrow">▼</span> ${listTitle}
+            </div>
+            <div class="report-section-body" style="max-height:200px; overflow-y:auto; padding:2px 4px;">
+                ${header}
+                ${rows}
+            </div>
+        </div>`;
+
+    // Scroll active row into view
+    const activeRow = document.getElementById('bl-row-' + reportCurrentIndex);
+    if (activeRow) {
+        activeRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+}
+
+function reportPrevBridge() {
+    if (reportBridgeList.length === 0 || reportCurrentIndex <= 0) return;
+    reportCurrentIndex--;
+    renderReportDetail(reportBridgeList[reportCurrentIndex]);
+    highlightReportBridge(reportBridgeList[reportCurrentIndex]);
+    updateReportNav();
+    renderReportBridgeList();
+    applyReportCategoryFilter();
+}
+
+function reportNextBridge() {
+    if (reportBridgeList.length === 0 || reportCurrentIndex >= reportBridgeList.length - 1) return;
+    reportCurrentIndex++;
+    renderReportDetail(reportBridgeList[reportCurrentIndex]);
+    highlightReportBridge(reportBridgeList[reportCurrentIndex]);
+    updateReportNav();
+    renderReportBridgeList();
+    applyReportCategoryFilter();
+}
+
+window.reportGoToBridge = function(idx) {
+    if (idx < 0 || idx >= reportBridgeList.length) return;
+    reportCurrentIndex = idx;
+    renderReportDetail(reportBridgeList[reportCurrentIndex]);
+    // Always autozoom when clicking a bridge in the list
+    const bridge = reportBridgeList[reportCurrentIndex];
+    removeReportHighlight();
+    if (bridge && bridge.latitude && bridge.longitude) {
+        const latlng = [parseFloat(bridge.latitude), parseFloat(bridge.longitude)];
+        reportZoomFromNav = true;
+        map.setView(latlng, 14);
+        reportHighlightMarker = L.circleMarker(latlng, {
+            radius: getHighlightRingRadius(), color: '#000000', weight: 3,
+            fillColor: 'transparent', fillOpacity: 0,
+            className: 'report-highlight-ring'
+        }).addTo(map);
+    }
+    updateReportNav();
+    renderReportBridgeList();
+    applyReportCategoryFilter();
+};
+
+// Calculate highlight ring radius: point size + gap so there's always space between point and ring
+function getHighlightRingRadius() {
+    const pointSize = getPointSize();
+    return pointSize + 6; // 6px gap between point edge and ring
+}
+
+function highlightReportBridge(bridge) {
+    removeReportHighlight();
+    if (!bridge || !bridge.latitude || !bridge.longitude) return;
+    const latlng = [parseFloat(bridge.latitude), parseFloat(bridge.longitude)];
+    // Only move the map if the bridge is NOT already in the current view
+    const inView = map.getBounds().contains(latlng);
+    if (!inView) {
+        if (reportMapMode === 'panZoom') {
+            reportZoomFromNav = true;
+            map.setView(latlng, 12);
+        } else if (reportMapMode === 'pan') {
+            map.panTo(latlng);
+        }
+    }
+    // Always place the highlight ring
+    reportHighlightMarker = L.circleMarker(latlng, {
+        radius: getHighlightRingRadius(),
+        color: '#000000',
+        weight: 3,
+        fillColor: 'transparent',
+        fillOpacity: 0,
+        className: 'report-highlight-ring'
+    }).addTo(map);
+}
+
+// Place ring only (no map movement) — used when CR syncs the RE
+function placeReportHighlightRing(bridge) {
+    removeReportHighlight();
+    if (!bridge || !bridge.latitude || !bridge.longitude) return;
+    const latlng = [parseFloat(bridge.latitude), parseFloat(bridge.longitude)];
+    reportHighlightMarker = L.circleMarker(latlng, {
+        radius: getHighlightRingRadius(), color: '#000000', weight: 3,
+        fillColor: 'transparent', fillOpacity: 0,
+        className: 'report-highlight-ring'
+    }).addTo(map);
+}
+
+function removeReportHighlight() {
+    if (reportHighlightMarker) {
+        map.removeLayer(reportHighlightMarker);
+        reportHighlightMarker = null;
+    }
+}
+
+// Sync CR buttons to match RE category selection
+function syncCRWithReCategory(category) {
+    const section = reportViewMode === 'inspection' ? 'insp' : 'maint';
+    if (category === 'total' || category === 'hubdata') {
+        // Clear CR isolation
+        if (bothActiveSection || bothActiveCategory) {
+            bothActiveSection = null;
+            bothActiveCategory = null;
+            applyBothCategoryFilter();
+            updateBothButtonStyles();
+            updateButtonStyles();
+        }
+    } else {
+        // Set CR to match
+        bothActiveSection = section;
+        bothActiveCategory = category;
+        applyBothCategoryFilter();
+        updateBothButtonStyles();
+        updateButtonStyles();
+    }
+}
+
+// Hard filter: when a category is fully engaged (clicked), only show matching bridges
+function applyReportCategoryFilter() {
+    if (!reportPanelOpen) return;
+    // Build set of BARS in current list for quick lookup
+    reportBarsSet = new Set(reportBridgeList.map(b => b.bars_number));
+
+    const isInsp = reportViewMode === 'inspection';
+    const hasCondLocks = !isInsp && (Object.keys(reportConditionFilters).length > 0 || reportSufficiencyFilter !== null);
+
+    Object.entries(bridgeLayers).forEach(([bars, marker]) => {
+        const bridge = marker.bridgeData;
+        if (!bridge) return;
+        if (!activeDistricts[bridge.district]) return;
+
+        if (hasCondLocks) {
+            // Condition locks active — show ALL points in maintenance colors
+            const color = getWorstConditionColor(bridge);
+            marker.setStyle({ fillColor: color });
+            if (reportBarsSet.has(bars)) {
+                // Matches locks — full prominence
+                marker.setStyle({ fillOpacity: 1, opacity: 1 });
+            } else {
+                // Doesn't match — dimmed but visible
+                marker.setStyle({ fillOpacity: 0.12, opacity: 0.4 });
+            }
+        } else if (reportBarsSet.has(bars)) {
+            // In list — full opacity, correct color
+            marker.setStyle({ fillOpacity: 1, opacity: 1 });
+        } else {
+            // Not in list — hidden (category is fully engaged)
+            marker.setStyle({ fillOpacity: 0, opacity: 0 });
+        }
+    });
+}
+
+
+function toggleReportSection(headerEl) {
+    const body = headerEl.nextElementSibling;
+    if (!body) return;
+    const arrow = headerEl.querySelector('.report-arrow');
+    if (body.classList.contains('collapsed')) {
+        body.classList.remove('collapsed');
+        if (arrow) arrow.textContent = '▼';
+    } else {
+        body.classList.add('collapsed');
+        if (arrow) arrow.textContent = '▶';
+    }
+}
+
+// --- Open RE from CF Inspection tab ---
+
+window.openReFromInspectionTab = function() {
+    // Close CF/AF/HUB panels
+    const condPanel = document.getElementById('evaluationPanel');
+    const attrPanel = document.getElementById('attributesPanel');
+    const hubPanel = document.getElementById('hubPanel');
+    if (condPanel) condPanel.classList.remove('open', 'ontop', 'behind');
+    if (attrPanel) attrPanel.classList.remove('open', 'ontop');
+    if (hubPanel) { hubPanel.classList.remove('open', 'ontop'); hubPanelActive = false; }
+    // Force inspection mode and open RE
+    reportViewMode = 'inspection';
+    if (!reportPanelOpen) toggleReportsPanel();
+};
+
+// --- RE Status Bar ---
+
+function updateReStatusBar() {
+    const bar = document.getElementById('re-status-bar');
+    if (!bar) return;
+    if (!reportPanelOpen) {
+        bar.style.display = 'none';
+        return;
+    }
+    bar.style.display = 'flex';
+    const isMaint = reportViewMode === 'maintenance';
+    bar.style.background = 'rgba(139, 0, 0, 0.95)';
+    const modeLabel = isMaint ? 'Maintenance Mode' : 'Inspection Mode';
+    const catLabels = isMaint
+        ? { total: 'All Bridges', critical: 'Critical', emergent: 'Emergent', satisfactory: 'Satisfactory', na: 'N/A', hubdata: 'HUB Data' }
+        : { total: 'All Bridges', critical: 'Past Due', emergent: 'Upcoming', satisfactory: 'Completed', na: 'N/A', hubdata: 'HUB Data' };
+    const catLabel = catLabels[reportCategory] || reportCategory;
+    const listType = isMaint ? 'Bridge List' : 'Inspection List';
+    const textEl = document.getElementById('re-status-text');
+    let lockInfo = '';
+    if (isMaint) {
+        const lockCount = Object.keys(reportConditionFilters).length + (reportSufficiencyFilter !== null ? 1 : 0);
+        if (lockCount > 0) lockInfo = '  [' + lockCount + ' lock' + (lockCount > 1 ? 's' : '') + ']';
+    }
+    if (textEl) textEl.textContent = modeLabel + '  \u2014  ' + catLabel + ' ' + listType + ' (' + reportBridgeList.length + ')' + lockInfo;
+    centerStatusBars();
+}
+
+// --- RE Share ---
+
+function openReShare(btn) {
+    showSharePopover(btn, {
+        whatMode: 'none',
+        getContent: function() {
+            const url = generateShareableLinkUrl();
+            return { subject: 'SpanBase — Report Explorer', body: 'Check out this SpanBase view:', url: url };
+        }
+    });
+}
+
+// --- Close RE when other tabs open ---
+
+function closeReportExplorerIfOpen() {
+    if (!reportPanelOpen) return;
+    const panel = document.getElementById('reportsPanel');
+    if (!panel) return;
+    panel.classList.remove('open', 'ontop');
+    reportPanelOpen = false;
+    removeReportHighlight();
+    reportBarsSet = null;
+    updateBridgeVisibility();
+    updateReStatusBar();
+}
+
+// --- RE Tutorial ---
+
+let reTourAllowUpDown = false;
+
+const reTourSteps = [
+    {
+        target: null,
+        title: 'Report Explorer',
+        text: 'The Report Explorer lets you browse bridge details by category. Navigate through bridges with arrow keys or buttons, view condition ratings, inspections, geometry, and more — all in one scrollable panel.\n\nLet\'s walk through how it works.'
+    },
+    {
+        target: '#reportModeBar',
+        title: 'Mode Selector',
+        text: 'The Report Explorer has two modes:\n\n\u2022 Maintenance Mode — View bridges by condition rating (Critical, Emergent, Satisfactory)\n\n\u2022 Inspection Mode — View bridges by inspection due status (Past Due, Upcoming, Completed)\n\nClick either button to switch modes. The active mode is shown in red.',
+        position: 'bottom'
+    },
+    {
+        target: '#reportCategoryBar',
+        title: 'Category Buttons',
+        text: 'Use these buttons to filter the bridge list by category. Each button shows only bridges in that group.\n\nYou can also press Left/Right arrow keys to cycle through categories.',
+        position: 'bottom'
+    },
+    {
+        target: '#reportTitleBox',
+        title: 'Bridge Navigation',
+        text: 'The title box shows the current bridge name with navigation arrows.\n\n\u2022 \u25B2 \u25BC arrows — Move to previous/next bridge\n\u2022 Up/Down arrow keys — Same as clicking arrows\n\u2022 Google Maps link — Open bridge location in Google Maps\n\u2022 AssetWise link — Open bridge record in AssetWise\n\u2022 Pan+Zoom toggle — Control map behavior during navigation\n\nLook for the black ring on the map highlighting the current bridge. Try pressing Up or Down to move through the list.',
+        position: 'bottom',
+        allowUpDown: true,
+        onEnter: function() {
+            // Highlight current bridge on map
+            if (reportBridgeList.length > 0) {
+                highlightReportBridge(reportBridgeList[reportCurrentIndex]);
+            }
+            // Lighten the overlay so the user can see the bridge ring on the map
+            const spot = document.getElementById('re-tour-spotlight');
+            if (spot) spot.style.boxShadow = '0 0 0 9999px rgba(0,0,0,0.35)';
+        },
+        onExit: function() {
+            removeReportHighlight();
+            // Restore full overlay darkness
+            const spot = document.getElementById('re-tour-spotlight');
+            if (spot) spot.style.boxShadow = '0 0 0 9999px rgba(0,0,0,0.7)';
+        }
+    },
+    {
+        target: '#reportBridgeListBox',
+        title: 'Bridge List & Details',
+        text: 'The bridge list shows all bridges in the selected category. Click any row to jump to that bridge. The active bridge is highlighted in gold.\n\nBelow the list, detailed bridge information is shown in collapsible sections:\n\n\u2022 Condition & Sufficiency \u2014 Component ratings and calculated sufficiency\n\u2022 Inspections \u2014 Schedule and due-date status\n\u2022 Geometry & Attributes \u2014 Physical bridge characteristics\n\u2022 Narratives \u2014 The most recent inspection report as recorded in AssetWise, with a direct link to the bridge\'s AssetWise entry\n\nClick any section header to expand or collapse it.',
+        position: 'right',
+        getTooltipPosition: function(tRect) {
+            const blEl = document.getElementById('reportBridgeListBox');
+            if (blEl) {
+                const blRect = blEl.getBoundingClientRect();
+                return {
+                    top: blRect.bottom + 8,
+                    left: blRect.left
+                };
+            }
+            return null;
+        }
+    },
+    {
+        target: '#reportDetail',
+        title: 'Condition Locks',
+        text: 'In Maintenance Mode, click any rating block (Deck, Super, Sub, Bearings, Joints) to lock that value as a filter. Locked ratings glow gold and the bridge list narrows to only bridges sharing that exact rating.\n\nYou can lock multiple ratings at once \u2014 they combine as an AND filter. The Sufficiency square works the same way, filtering to bridges within \u00B110 of the clicked value.\n\nClick a locked rating again to unlock it, or use the Clear link to remove all locks.',
+        position: 'right'
+    },
+    {
+        target: '#re-status-text',
+        title: 'Status Bar',
+        text: 'The status bar at the bottom of the screen shows your current mode and category at a glance.\n\nIt also shows which list you\'re viewing, how many bridges match, and whether any condition locks are active.',
+        position: 'top'
+    },
+    {
+        target: null,
+        title: 'Count Report & Bridge Selection',
+        text: 'The Count Report and Report Explorer work together.\n\n\u2022 Maintenance / Inspection — Switch the color theme.\n\u2022 Critical / Emergent / Satisfactory — Isolate a category. The Report Explorer syncs automatically.\n\u2022 Hamburger (\u2630) — Opens a sortable detail table.\n\u2022 HUB Data — Highlights bridges with HUB project data.\n\nClick any row in the bridge list to zoom to that bridge. Use Up/Down arrow keys to move through the list. Try it now.',
+        allowUpDown: true,
+        getTooltipPosition: function(tRect) {
+            // Position tooltip near the Charleston circle cutout
+            const coords = window._reTourCharlestonXY;
+            if (coords) {
+                return {
+                    top: coords.cy + 110,  // just below the 100px radius circle
+                    left: coords.cx - tRect.width / 2  // centered under the circle
+                };
+            }
+            return null;
+        },
+        onEnter: function() {
+            // Hide the normal spotlight (we use a custom SVG overlay with dual cutouts)
+            const spot = document.getElementById('re-tour-spotlight');
+            if (spot) spot.style.boxShadow = 'none';
+
+            // Allow clicking through overlay to bridge list
+            const overlay = document.getElementById('re-tour-overlay');
+            if (overlay) overlay.style.pointerEvents = 'none';
+
+            // Highlight current bridge on map
+            if (reportBridgeList.length > 0) {
+                highlightReportBridge(reportBridgeList[reportCurrentIndex]);
+            }
+
+            // Get Bridge List rect
+            const blEl = document.getElementById('reportBridgeListBox');
+            const blRect = blEl ? blEl.getBoundingClientRect() : null;
+
+            // Get Charleston, WV screen position (approx 38.35, -81.63)
+            const charlestonLatLng = L.latLng(38.35, -81.63);
+            const charlestonPt = map.latLngToContainerPoint(charlestonLatLng);
+            const mapContainer = map.getContainer().getBoundingClientRect();
+            const cx = mapContainer.left + charlestonPt.x;
+            const cy = mapContainer.top + charlestonPt.y;
+
+            // Create SVG overlay with two cutouts (lightened for map visibility)
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.id = 're-tour-dual-overlay';
+            svg.setAttribute('width', window.innerWidth);
+            svg.setAttribute('height', window.innerHeight);
+            svg.style.cssText = 'position:fixed; top:0; left:0; z-index:12000; pointer-events:none;';
+
+            const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+            const mask = document.createElementNS('http://www.w3.org/2000/svg', 'mask');
+            mask.id = 're-tour-dual-mask';
+
+            // White background = visible dark overlay
+            const maskBg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            maskBg.setAttribute('x', '0'); maskBg.setAttribute('y', '0');
+            maskBg.setAttribute('width', '100%'); maskBg.setAttribute('height', '100%');
+            maskBg.setAttribute('fill', 'white');
+            mask.appendChild(maskBg);
+
+            // Black circle = cutout around Charleston (200px diameter)
+            const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            circle.setAttribute('cx', cx); circle.setAttribute('cy', cy);
+            circle.setAttribute('r', '100');
+            circle.setAttribute('fill', 'black');
+            mask.appendChild(circle);
+
+            // Black rect = cutout over Bridge List
+            if (blRect) {
+                const pad = 6;
+                const blCut = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                blCut.setAttribute('x', blRect.left - pad);
+                blCut.setAttribute('y', blRect.top - pad);
+                blCut.setAttribute('width', blRect.width + pad * 2);
+                blCut.setAttribute('height', blRect.height + pad * 2);
+                blCut.setAttribute('rx', '8'); blCut.setAttribute('ry', '8');
+                blCut.setAttribute('fill', 'black');
+                mask.appendChild(blCut);
+            }
+
+            // Black rect = cutout over Count Report (so CR buttons are visible)
+            const crEl = document.getElementById('countReport');
+            const crRect = crEl ? crEl.getBoundingClientRect() : null;
+            if (crRect) {
+                const pad = 6;
+                const crCut = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                crCut.setAttribute('x', crRect.left - pad);
+                crCut.setAttribute('y', crRect.top - pad);
+                crCut.setAttribute('width', crRect.width + pad * 2);
+                crCut.setAttribute('height', crRect.height + pad * 2);
+                crCut.setAttribute('rx', '8'); crCut.setAttribute('ry', '8');
+                crCut.setAttribute('fill', 'black');
+                mask.appendChild(crCut);
+            }
+
+            defs.appendChild(mask);
+            svg.appendChild(defs);
+
+            // Overlay darkness — 0.55 to stay consistent with other tutorial slides
+            const overlayRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            overlayRect.setAttribute('x', '0'); overlayRect.setAttribute('y', '0');
+            overlayRect.setAttribute('width', '100%'); overlayRect.setAttribute('height', '100%');
+            overlayRect.setAttribute('fill', 'rgba(0,0,0,0.55)');
+            overlayRect.setAttribute('mask', 'url(#re-tour-dual-mask)');
+            svg.appendChild(overlayRect);
+
+            document.body.appendChild(svg);
+
+            // Store Charleston screen coords for tooltip positioning
+            window._reTourCharlestonXY = { cx: cx, cy: cy };
+
+            // Animate CR buttons cycling through states (including HUB Data)
+            const cats = ['critical', 'emergent', 'satisfactory', 'hubdata'];
+            let animStep = 0;
+            window._reTourCRAnimation = setInterval(function() {
+                const cat = cats[animStep % cats.length];
+                const section = reportViewMode === 'inspection' ? 'insp' : 'maint';
+                const btn = document.getElementById('btn-' + section + '-' + cat) || document.getElementById('btn-' + cat);
+                if (btn) {
+                    btn.style.transform = 'scale(1.08)';
+                    btn.style.boxShadow = '0 0 8px rgba(255,184,28,0.6)';
+                    setTimeout(function() {
+                        btn.style.transform = '';
+                        btn.style.boxShadow = '';
+                    }, 600);
+                }
+                animStep++;
+                if (animStep >= cats.length * 2) {
+                    clearInterval(window._reTourCRAnimation);
+                    window._reTourCRAnimation = null;
+                }
+            }, 800);
+        },
+        onExit: function() {
+            // Remove dual SVG overlay
+            const svgOverlay = document.getElementById('re-tour-dual-overlay');
+            if (svgOverlay) svgOverlay.remove();
+
+            // Restore normal spotlight box-shadow
+            const spot = document.getElementById('re-tour-spotlight');
+            if (spot) spot.style.boxShadow = '0 0 0 9999px rgba(0,0,0,0.7)';
+
+            // Restore overlay pointer events
+            const overlay = document.getElementById('re-tour-overlay');
+            if (overlay) overlay.style.pointerEvents = 'auto';
+
+            removeReportHighlight();
+
+            if (window._reTourCRAnimation) {
+                clearInterval(window._reTourCRAnimation);
+                window._reTourCRAnimation = null;
+            }
+            // Reset any leftover styles
+            document.querySelectorAll('#countReportBody button').forEach(function(btn) {
+                btn.style.transform = '';
+                btn.style.boxShadow = '';
+            });
+            window._reTourCharlestonXY = null;
+        }
+    },
+    {
+        target: '#re-share-bottom',
+        title: 'Sharing',
+        text: 'Use the Share button at the bottom of the panel to share a link to your current view via clipboard, email, or QR code.\n\nYour recipient will see the same map state, filters, and bridge data.',
+        position: 'top'
+    },
+    {
+        target: null,
+        title: 'You\'re Ready!',
+        text: 'That\'s it! You now know how to use the Report Explorer.\n\nQuick reference:\n\u2022 Up/Down — Navigate bridges\n\u2022 Left/Right — Cycle categories\n\u2022 Click map point — Jump to that bridge\n\u2022 Escape — Close the Report Explorer\n\nHappy exploring!'
+    }
+];
+
+window.startReTour = function() {
+    if (reTourActive) return;
+    reTourActive = true;
+    reTourStep = 0;
+
+    // Create overlay elements (reuse tour CSS classes)
+    const overlay = document.createElement('div');
+    overlay.id = 're-tour-overlay';
+    overlay.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; z-index:11999; pointer-events:auto;';
+    document.body.appendChild(overlay);
+
+    const spotlight = document.createElement('div');
+    spotlight.id = 're-tour-spotlight';
+    spotlight.style.cssText = 'position:fixed; z-index:12000; border-radius:8px; box-shadow:0 0 0 9999px rgba(0,0,0,0.7); pointer-events:none; transition:all 0.3s ease;';
+    document.body.appendChild(spotlight);
+
+    const tooltip = document.createElement('div');
+    tooltip.id = 're-tour-tooltip';
+    tooltip.style.cssText = 'position:fixed; z-index:12001; background:var(--wvdoh-blue); border:2px solid var(--wvdoh-yellow); border-radius:8px; padding:16px 20px; max-width:340px; color:#fff; box-shadow:0 4px 20px rgba(0,0,0,0.4); transition:opacity 0.25s ease; pointer-events:auto;';
+    document.body.appendChild(tooltip);
+
+    showReTourStep(0);
+    window.addEventListener('keydown', onReTourKeydown);
+    window.addEventListener('resize', onReTourResize);
+};
+
+function reTourExitCurrentStep() {
+    const step = reTourSteps[reTourStep];
+    if (step && step.onExit) step.onExit();
+}
+
+function showReTourStep(index) {
+    if (index < 0 || index >= reTourSteps.length) return;
+
+    const step = reTourSteps[index];
+    const spotlight = document.getElementById('re-tour-spotlight');
+    const tooltip = document.getElementById('re-tour-tooltip');
+    if (!spotlight || !tooltip) return;
+
+    // Set up/down permission for this step
+    reTourAllowUpDown = !!step.allowUpDown;
+
+    // Call onEnter for the new step
+    if (step.onEnter) step.onEnter();
+
+    requestAnimationFrame(() => {
+        let spotRect = null;
+        const pad = 6;
+
+        if (step.getSpotRect) {
+            // Custom spotlight rect (e.g. map area)
+            spotRect = step.getSpotRect();
+            if (spotRect) {
+                spotlight.style.top = spotRect.top + 'px';
+                spotlight.style.left = spotRect.left + 'px';
+                spotlight.style.width = spotRect.width + 'px';
+                spotlight.style.height = spotRect.height + 'px';
+                spotlight.style.borderRadius = step.spotRadius || '8px';
+            } else {
+                spotlight.style.top = '50%';
+                spotlight.style.left = '50%';
+                spotlight.style.width = '0px';
+                spotlight.style.height = '0px';
+                spotlight.style.borderRadius = '50%';
+            }
+        } else if (step.target) {
+            const el = document.querySelector(step.target);
+            if (el) {
+                const rect = el.getBoundingClientRect();
+                spotRect = {
+                    top: rect.top - pad, left: rect.left - pad,
+                    right: rect.right + pad, bottom: rect.bottom + pad,
+                    width: rect.width + pad * 2, height: rect.height + pad * 2
+                };
+                spotlight.style.top = spotRect.top + 'px';
+                spotlight.style.left = spotRect.left + 'px';
+                spotlight.style.width = spotRect.width + 'px';
+                spotlight.style.height = spotRect.height + 'px';
+                spotlight.style.borderRadius = '8px';
+            } else {
+                spotRect = null;
+                spotlight.style.top = '50%';
+                spotlight.style.left = '50%';
+                spotlight.style.width = '0px';
+                spotlight.style.height = '0px';
+                spotlight.style.borderRadius = '50%';
+            }
+        } else {
+            spotlight.style.top = '50%';
+            spotlight.style.left = '50%';
+            spotlight.style.width = '0px';
+            spotlight.style.height = '0px';
+            spotlight.style.borderRadius = '50%';
+        }
+
+        // Build tooltip
+        const total = reTourSteps.length;
+        const backBtn = index > 0 ? '<button class="tour-btn" onclick="prevReTourStep()">Back</button>' : '<span></span>';
+        const nextLabel = index < total - 1 ? 'Next' : 'Finish';
+        const nextBtn = '<button class="tour-btn" onclick="nextReTourStep()">' + nextLabel + '</button>';
+        const closeBtn = '<button class="tour-btn" onclick="endReTour()" style="margin-left:8px;border-color:rgba(255,255,255,0.3);color:rgba(255,255,255,0.6);">\u2715</button>';
+        const formattedText = step.text.replace(/\n/g, '<br>');
+
+        let pageLinks = '<div class="tour-pages">';
+        for (let i = 0; i < total; i++) {
+            const active = i === index ? ' tour-page-active' : '';
+            pageLinks += '<span class="tour-page' + active + '" onclick="goToReTourStep(' + i + ')">' + (i + 1) + '</span>';
+        }
+        pageLinks += '</div>';
+
+        tooltip.innerHTML =
+            '<h4 style="color:var(--wvdoh-yellow); margin:0 0 8px 0; font-size:12pt;">' + step.title + '</h4>' +
+            '<p style="margin:0 0 12px 0; font-size:10pt; line-height:1.5; color:rgba(255,255,255,0.9);">' + formattedText + '</p>' +
+            '<div class="tour-nav">' + backBtn + '<div>' + nextBtn + closeBtn + '</div></div>' +
+            pageLinks;
+
+        // Position tooltip
+        positionReTourTooltip(step, spotRect, tooltip);
+    });
+}
+
+function positionReTourTooltip(step, spotRect, tooltip) {
+    tooltip.style.top = '0px';
+    tooltip.style.left = '0px';
+    tooltip.style.opacity = '0';
+
+    requestAnimationFrame(() => {
+        const tRect = tooltip.getBoundingClientRect();
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const gap = 8;
+        let top, left;
+
+        // Custom tooltip position callback
+        if (step.getTooltipPosition) {
+            const pos = step.getTooltipPosition(tRect);
+            if (pos) { top = pos.top; left = pos.left; }
+        } else if (step.tooltipRight) {
+            top = (vh - tRect.height) / 2;
+            left = vw - tRect.width - 20;
+        } else if (step.target === null || !spotRect) {
+            top = (vh - tRect.height) / 2;
+            left = (vw - tRect.width) / 2;
+        } else {
+            switch (step.position) {
+                case 'bottom':
+                    top = spotRect.bottom + gap;
+                    left = spotRect.left + (spotRect.width - tRect.width) / 2;
+                    break;
+                case 'top':
+                    top = spotRect.top - tRect.height - gap;
+                    left = spotRect.left + (spotRect.width - tRect.width) / 2;
+                    break;
+                case 'left':
+                    top = spotRect.top + (spotRect.height - tRect.height) / 2;
+                    left = spotRect.left - tRect.width - gap;
+                    break;
+                case 'right':
+                    top = spotRect.top + (spotRect.height - tRect.height) / 2;
+                    left = spotRect.right + gap;
+                    break;
+                default:
+                    top = spotRect.bottom + gap;
+                    left = spotRect.left + (spotRect.width - tRect.width) / 2;
+            }
+        }
+
+        if (left < 10) left = 10;
+        if (left + tRect.width > vw - 10) left = vw - tRect.width - 10;
+        if (top < 10) top = 10;
+        if (top + tRect.height > vh - 10) top = vh - tRect.height - 10;
+
+        tooltip.style.top = top + 'px';
+        tooltip.style.left = left + 'px';
+        tooltip.style.opacity = '1';
+    });
+}
+
+window.nextReTourStep = function() {
+    if (!reTourActive) return;
+    reTourExitCurrentStep();
+    reTourStep++;
+    if (reTourStep >= reTourSteps.length) {
+        endReTour();
+    } else {
+        showReTourStep(reTourStep);
+    }
+};
+
+window.prevReTourStep = function() {
+    if (!reTourActive || reTourStep <= 0) return;
+    reTourExitCurrentStep();
+    reTourStep--;
+    showReTourStep(reTourStep);
+};
+
+window.goToReTourStep = function(index) {
+    if (!reTourActive) return;
+    if (index < 0 || index >= reTourSteps.length || index === reTourStep) return;
+    reTourExitCurrentStep();
+    reTourStep = index;
+    showReTourStep(reTourStep);
+};
+
+window.endReTour = function() {
+    if (!reTourActive) return;
+    // Call onExit for current step
+    const currentStep = reTourSteps[reTourStep];
+    if (currentStep && currentStep.onExit) currentStep.onExit();
+    const overlay = document.getElementById('re-tour-overlay');
+    const spotlight = document.getElementById('re-tour-spotlight');
+    const tooltip = document.getElementById('re-tour-tooltip');
+    if (overlay) overlay.remove();
+    if (spotlight) spotlight.remove();
+    if (tooltip) tooltip.remove();
+    reTourActive = false;
+    reTourStep = 0;
+    reTourAllowUpDown = false;
+    window.removeEventListener('keydown', onReTourKeydown);
+    window.removeEventListener('resize', onReTourResize);
+};
+
+function onReTourKeydown(e) {
+    if (!reTourActive) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); endReTour(); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); nextReTourStep(); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); e.stopPropagation(); prevReTourStep(); }
+    // Allow Up/Down only on steps that explicitly permit it
+    if (reTourAllowUpDown && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault(); e.stopPropagation();
+        if (e.key === 'ArrowUp') reportPrevBridge();
+        else reportNextBridge();
+        // Re-highlight the current bridge after navigation
+        if (reportBridgeList.length > 0) {
+            highlightReportBridge(reportBridgeList[reportCurrentIndex]);
+        }
+    }
+}
+
+function onReTourResize() {
+    if (!reTourActive) return;
+    showReTourStep(reTourStep);
+}
+
+// --- Content generators (extracted from show* functions for reuse) ---
+
+function generateGeometryAttributesHTML(bridge) {
+    const age = bridge.bridge_age ? `${bridge.bridge_age}y` : '—';
+    const gs = 'font-size:7pt; line-height:1.3;';
+    const lbl = 'color:rgba(255,255,255,0.5); font-size:6pt;';
+    const val = 'color:#fff; font-weight:600; font-size:7pt;';
+    const row = (label, value) => `<div style="display:flex; justify-content:space-between; padding:1px 0;"><span style="${lbl}">${label}</span><span style="${val}">${value}</span></div>`;
+
+    return `<div style="${gs}">` +
+        row('Length', (bridge.bridge_length || '—') + ' ft') +
+        row('Total Length', (bridge.total_bridge_length || '—') + ' ft') +
+        row('Width O-O', (bridge.width_out_to_out || '—') + ' ft') +
+        row('Width C-C', (bridge.width_curb_to_curb || '—') + ' ft') +
+        row('Skew', (bridge.skew || '—') + '\u00B0') +
+        row('Max Height', (bridge.max_height || '—') + ' ft') +
+        row('Area', (bridge.bridge_area || '—') + ' sqft') +
+        row('Min Vert. Clr', (bridge.minvc1f || '—') + ' ft') +
+        row('Min Underclr', (bridge.min_underclearance || '—') + ' ft') +
+        row('Year Built', bridge.year_built || '—') +
+        row('Age', age) +
+        row('Type', bridge.bridge_type || '—') +
+        (bridge.span_lengths ? row('Spans', bridge.span_lengths) : '') +
+        `<div style="margin-top:4px; padding-top:3px; border-top:1px solid rgba(255,255,255,0.1);">` +
+        row('Route', bridge.route || '—') +
+        row('Subroute', bridge.subroute || '—') +
+        row('Func. Class', bridge.functional_class || '—') +
+        row('NHS', bridge.nhs || '—') +
+        row('ADT', bridge.adt != null ? bridge.adt.toLocaleString() : '—') +
+        row('On Bridge', bridge.on_bridge || '—') +
+        row('Under Bridge', bridge.under_bridge || '—') +
+        row('Location', bridge.location || '—') +
+        row('Design #', bridge.bridge_design_number || '—') +
+        row('Utilities', bridge.utilities_on_bridge || '—') +
+        `</div></div>`;
+}
+
+// Keep standalone generators for radial menu popups (unchanged)
+function generateGeometryHTML(bridge) {
+    const age = bridge.bridge_age ? `${bridge.bridge_age} years` : 'Unknown';
+    return `
+        <div class="info-grid">
+            <div class="info-item"><span class="info-label">Bridge Length</span><span class="info-value">${bridge.bridge_length || 'N/A'} ft</span></div>
+            <div class="info-item"><span class="info-label">Total Length</span><span class="info-value">${bridge.total_bridge_length || 'N/A'} ft</span></div>
+            <div class="info-item"><span class="info-label">Width (Out-to-Out)</span><span class="info-value">${bridge.width_out_to_out || 'N/A'} ft</span></div>
+            <div class="info-item"><span class="info-label">Width (Curb-to-Curb)</span><span class="info-value">${bridge.width_curb_to_curb || 'N/A'} ft</span></div>
+            <div class="info-item"><span class="info-label">Left Sidewalk</span><span class="info-value">${bridge.left_sidewalk_width || 'N/A'} ft</span></div>
+            <div class="info-item"><span class="info-label">Right Sidewalk</span><span class="info-value">${bridge.right_sidewalk_width || 'N/A'} ft</span></div>
+            <div class="info-item"><span class="info-label">Median</span><span class="info-value">${bridge.bridge_median || 'N/A'} ft</span></div>
+            <div class="info-item"><span class="info-label">Skew</span><span class="info-value">${bridge.skew || 'N/A'}&deg;</span></div>
+            <div class="info-item"><span class="info-label">Max Height</span><span class="info-value">${bridge.max_height || 'N/A'} ft</span></div>
+            <div class="info-item"><span class="info-label">Bridge Area</span><span class="info-value">${bridge.bridge_area || 'N/A'} sq ft</span></div>
+            <div class="info-item"><span class="info-label">Min Vertical Clearance</span><span class="info-value">${bridge.minvc1f || 'N/A'} ft</span></div>
+            <div class="info-item"><span class="info-label">Min Underclearance</span><span class="info-value">${bridge.min_underclearance || 'N/A'} ft</span></div>
+            <div class="info-item"><span class="info-label">Year Built</span><span class="info-value">${bridge.year_built || 'N/A'}</span></div>
+            <div class="info-item"><span class="info-label">Age</span><span class="info-value">${age}</span></div>
+            <div class="info-item" style="grid-column: 1 / -1;"><span class="info-label">Type</span><span class="info-value">${bridge.bridge_type || 'N/A'}</span></div>
+        </div>
+        ${bridge.span_lengths ? `<div style="margin-top:15px;"><strong>Span Lengths:</strong> ${bridge.span_lengths}</div>` : ''}`;
+}
+
+function generateAttributesHTML(bridge) {
+    return `
+        <div class="info-grid">
+            <div class="info-item"><span class="info-label">Latitude</span><span class="info-value">${bridge.latitude || 'N/A'}</span></div>
+            <div class="info-item"><span class="info-label">Longitude</span><span class="info-value">${bridge.longitude || 'N/A'}</span></div>
+            <div class="info-item full-width"><span class="info-label">Location</span><span class="info-value">${bridge.location || 'N/A'}</span></div>
+            <div class="info-item"><span class="info-label">Design Number</span><span class="info-value">${bridge.bridge_design_number || 'N/A'}</span></div>
+            <div class="info-item"><span class="info-label">Utilities</span><span class="info-value">${bridge.utilities_on_bridge || 'N/A'}</span></div>
+            <div class="info-item"><span class="info-label">NHS</span><span class="info-value">${bridge.nhs || 'N/A'}</span></div>
+            <div class="info-item full-width"><span class="info-label">Functional Class</span><span class="info-value">${bridge.functional_class || 'N/A'}</span></div>
+            <div class="info-item"><span class="info-label">Route</span><span class="info-value">${bridge.route || 'N/A'}</span></div>
+            <div class="info-item"><span class="info-label">Subroute</span><span class="info-value">${bridge.subroute || 'N/A'}</span></div>
+            <div class="info-item"><span class="info-label">On Bridge</span><span class="info-value">${bridge.on_bridge || 'N/A'}</span></div>
+            <div class="info-item"><span class="info-label">Under Bridge</span><span class="info-value">${bridge.under_bridge || 'N/A'}</span></div>
+            <div class="info-item"><span class="info-label">ADT</span><span class="info-value">${bridge.adt != null ? bridge.adt.toLocaleString() : 'N/A'}</span></div>
+            <div class="info-item"><span class="info-label">ADT Year</span><span class="info-value">${bridge.adt_year || 'N/A'}</span></div>
+        </div>`;
+}
+
+function generateConditionHTML(bridge) {
+    let calcSufficiency = 'N/A';
+    const bars = bridge.bars_number;
+    if (sufficiencyData[bars] !== undefined) {
+        calcSufficiency = sufficiencyData[bars].toFixed(1);
+    }
+
+    const ratings = [
+        { label: 'Deck', short: 'DK', value: bridge.deck_rating, field: 'deck_rating' },
+        { label: 'Super', short: 'SP', value: bridge.superstructure_rating, field: 'superstructure_rating' },
+        { label: 'Sub', short: 'SB', value: bridge.substructure_rating, field: 'substructure_rating' },
+        { label: 'Bear', short: 'BR', value: bridge.bearings_rating, field: 'bearings_rating' },
+        { label: 'Joints', short: 'JT', value: bridge.joints_rating, field: 'joints_rating' },
+    ];
+
+    const lockable = reportPanelOpen && reportViewMode === 'maintenance';
+    let html = '<div style="display:flex; gap:12px; justify-content:center; align-items:flex-end;">';
+    ratings.forEach(r => {
+        const rating = r.value || '-';
+        const color = r.value ? conditionColors[r.value] || '#6b7280' : '#6b7280';
+        const isActive = lockable && reportConditionFilters[r.field] !== undefined;
+        const activeStyle = isActive ? 'outline:2px solid #FFB81C; outline-offset:2px; box-shadow:0 0 8px rgba(255,184,28,0.5);' : '';
+        const cursor = (lockable && r.value) ? 'cursor:pointer;' : '';
+        const onclick = (lockable && r.value) ? `onclick="toggleReportConditionFilter('${r.field}', '${r.value}')"` : '';
+        const title = (lockable && r.value) ? `title="Click to lock: show only bridges with ${r.label} rating ${rating}"` : '';
+        html += `<div style="text-align:center;">
+            <div ${onclick} ${title} style="width:34px;height:34px;background:${color};border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:11pt;font-weight:700;color:#fff;${cursor}${activeStyle}">${rating}</div>
+            <div style="font-size:7pt;color:rgba(255,255,255,0.6);margin-top:3px;font-weight:600;">${r.label}</div>
+        </div>`;
+    });
+    // Sufficiency as the last square
+    const sufColor = calcSufficiency !== 'N/A' && parseFloat(calcSufficiency) < 50 ? '#dc2626' : '#FFB81C';
+    const sufActive = lockable && reportSufficiencyFilter !== null;
+    const sufActiveStyle = sufActive ? 'outline:2px solid #FFB81C; outline-offset:2px; box-shadow:0 0 8px rgba(255,184,28,0.5);' : '';
+    const sufClick = (lockable && calcSufficiency !== 'N/A') ? `onclick="toggleReportSufficiencyFilter(${parseFloat(calcSufficiency)})"` : '';
+    const sufCursor = (lockable && calcSufficiency !== 'N/A') ? 'cursor:pointer;' : '';
+    const sufTitle = (lockable && calcSufficiency !== 'N/A') ? `title="Click to lock: show bridges with sufficiency ${calcSufficiency} ±10"` : '';
+    html += `<div style="text-align:center; margin-left:4px;">
+        <div ${sufClick} ${sufTitle} style="width:34px;height:34px;background:rgba(255,184,28,0.15);border:2px solid ${sufColor};border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:9pt;font-weight:700;color:${sufColor};${sufCursor}${sufActiveStyle}">${calcSufficiency}</div>
+        <div style="font-size:7pt;color:rgba(255,255,255,0.6);margin-top:3px;font-weight:600;">Suf.</div>
+    </div>`;
+    html += '</div>';
+
+    // Show active lock indicator (maintenance mode only)
+    const activeFilters = Object.keys(reportConditionFilters);
+    if (lockable && (activeFilters.length > 0 || reportSufficiencyFilter !== null)) {
+        html += '<div style="text-align:center; margin-top:8px; font-size:7.5pt; color:var(--wvdoh-yellow); opacity:0.8;">Locked: ';
+        const parts = [];
+        activeFilters.forEach(f => {
+            const name = f.replace('_rating', '').replace('superstructure', 'super').replace('substructure', 'sub');
+            parts.push(name.charAt(0).toUpperCase() + name.slice(1) + '=' + reportConditionFilters[f]);
+        });
+        if (reportSufficiencyFilter !== null) {
+            parts.push('Suf. ' + (reportSufficiencyFilter - 10).toFixed(0) + '–' + (reportSufficiencyFilter + 10).toFixed(0));
+        }
+        html += parts.join(', ');
+        html += ' <span onclick="clearReportConditionFilters()" style="cursor:pointer; text-decoration:underline; margin-left:6px;">Clear</span></div>';
+    }
+
+    return html;
+}
+
+// Rebuild bridge list and UI after condition lock change
+function refreshAfterConditionLock(prevBars) {
+    buildReportBridgeList(reportCategory);
+    // Try to stay on the same bridge; if it's been filtered out, go to 0
+    if (prevBars) {
+        const newIdx = reportBridgeList.findIndex(b => b.bars_number === prevBars);
+        reportCurrentIndex = newIdx >= 0 ? newIdx : 0;
+    } else {
+        reportCurrentIndex = 0;
+    }
+    renderReportBridgeList();
+    renderReportTitleBox();
+    removeReportHighlight();
+    if (reportBridgeList.length > 0) {
+        renderReportDetail(reportBridgeList[reportCurrentIndex]);
+    } else {
+        document.getElementById('reportDetail').innerHTML = '<div style="padding:16px; text-align:center; color:rgba(255,255,255,0.5); font-size:9pt;">No bridges match the locked conditions</div>';
+    }
+    applyReportCategoryFilter();
+    updateReStatusBar();
+}
+
+// Toggle a condition rating lock — filters bridge list to matching bridges
+window.toggleReportConditionFilter = function(field, value) {
+    const prevBars = reportBridgeList.length > 0 ? reportBridgeList[reportCurrentIndex].bars_number : null;
+    if (reportConditionFilters[field] === value) {
+        delete reportConditionFilters[field];
+    } else {
+        reportConditionFilters[field] = value;
+    }
+    refreshAfterConditionLock(prevBars);
+};
+
+// Toggle sufficiency lock (±10 range)
+window.toggleReportSufficiencyFilter = function(value) {
+    const prevBars = reportBridgeList.length > 0 ? reportBridgeList[reportCurrentIndex].bars_number : null;
+    if (reportSufficiencyFilter === value) {
+        reportSufficiencyFilter = null;
+    } else {
+        reportSufficiencyFilter = value;
+    }
+    refreshAfterConditionLock(prevBars);
+};
+
+// Clear all condition locks
+window.clearReportConditionFilters = function() {
+    const prevBars = reportBridgeList.length > 0 ? reportBridgeList[reportCurrentIndex].bars_number : null;
+    reportConditionFilters = {};
+    reportSufficiencyFilter = null;
+    refreshAfterConditionLock(prevBars);
+};
+
+// Note: condition lock visibility is now handled inside applyReportCategoryFilter()
+
+function generateNarrativesHTML(bridge) {
+    const narratives = [
+        { label: 'Paint', field: 'narrative_paint' },
+        { label: 'Substructure', field: 'narrative_substructure' },
+        { label: 'Deck', field: 'narrative_deck' },
+        { label: 'Expansion Joint Openings', field: 'narrative_joints' },
+        { label: 'Railings', field: 'narrative_railings' },
+        { label: 'Superstructure', field: 'narrative_superstructure' },
+        { label: 'Summary & Recommendations', field: 'narrative_summary' },
+        { label: "Engineer's Comments", field: 'narrative_comments' }
+    ];
+
+    let html = '';
+    let hasContent = false;
+    narratives.forEach(n => {
+        const text = bridge[n.field];
+        if (text && text.trim()) {
+            hasContent = true;
+            html += `<div class="narrative-section"><h4>${n.label}</h4><p>${text}</p></div>`;
+        }
+    });
+
+    if (!hasContent) {
+        html = '<p style="color:#999;">No narrative data available.</p>';
+    }
+    return html;
+}
+
+function generateInspectionsHTML(bridge) {
+    const bars = bridge.bars_number;
+    const inspections = inspectionsData[bars];
+
+    if (!inspections || inspections.length === 0) {
+        return '<p style="color:#999;">No inspection data available.</p>';
+    }
+
+    const today = new Date();
+    const sorted = inspections.slice().sort((a, b) => {
+        const aDate = parseDateString(a.due);
+        const bDate = parseDateString(b.due);
+        if (!aDate && !bDate) return 0;
+        if (!aDate) return 1;
+        if (!bDate) return -1;
+        const aOverdue = aDate < today;
+        const bOverdue = bDate < today;
+        if (aOverdue && !bOverdue) return -1;
+        if (!aOverdue && bOverdue) return 1;
+        return aDate - bDate;
+    });
+
+    let html = `<table style="width:100%; border-collapse:collapse; font-size:9pt;">
+        <thead><tr style="background:rgba(0,40,85,0.3); border-bottom:2px solid #FFB81C;">
+            <th style="padding:6px; text-align:left;">Type</th>
+            <th style="padding:6px; text-align:left;">Begin</th>
+            <th style="padding:6px; text-align:left;">Completion</th>
+            <th style="padding:6px; text-align:left;">Due</th>
+            <th style="padding:6px; text-align:left;">Status</th>
+        </tr></thead><tbody>`;
+
+    sorted.forEach(insp => {
+        const dueDate = parseDateString(insp.due);
+        const completionDate = parseDateString(insp.completion);
+        const now = new Date();
+        const intervalMonths = insp.interval || 24;
+        let status = '\u2014';
+        let rowStyle = '';
+
+        if (dueDate) {
+            const previousDueDate = new Date(dueDate);
+            previousDueDate.setMonth(previousDueDate.getMonth() - intervalMonths);
+
+            if (completionDate) {
+                if (completionDate > previousDueDate) {
+                    if (completionDate <= dueDate) {
+                        const daysEarly = Math.floor((dueDate - completionDate) / 86400000);
+                        status = daysEarly === 0 ? '\u2713 On Time' : `\u2713 On Time (${daysEarly}d early)`;
+                        rowStyle = 'background:rgba(16,185,129,0.1); color:#6EE7B7;';
+                    } else {
+                        const daysLate = Math.floor((completionDate - dueDate) / 86400000);
+                        status = `\u26A0 Overdue (${daysLate}d)`;
+                        rowStyle = 'background:rgba(245,158,11,0.2); color:#FCD34D;';
+                    }
+                } else {
+                    if (now > dueDate) {
+                        const daysPast = Math.floor((now - dueDate) / 86400000);
+                        status = `\u26A0 PAST DUE (${daysPast}d)`;
+                        rowStyle = 'background:rgba(220,38,38,0.2); color:#FCA5A5;';
+                    } else {
+                        const daysUntil = Math.floor((dueDate - now) / 86400000);
+                        status = daysUntil <= 30 ? `\u26A0 Due Soon (${daysUntil}d)` : `Upcoming (${daysUntil}d)`;
+                        if (daysUntil <= 30) rowStyle = 'background:rgba(245,158,11,0.1);';
+                    }
+                }
+            } else {
+                if (now > dueDate) {
+                    const daysPast = Math.floor((now - dueDate) / 86400000);
+                    status = `\u26A0 PAST DUE (${daysPast}d)`;
+                    rowStyle = 'background:rgba(220,38,38,0.2); color:#FCA5A5;';
+                } else {
+                    const daysUntil = Math.floor((dueDate - now) / 86400000);
+                    status = daysUntil <= 30 ? `\u26A0 Due Soon (${daysUntil}d)` : `Upcoming (${daysUntil}d)`;
+                    if (daysUntil <= 30) rowStyle = 'background:rgba(245,158,11,0.1);';
+                }
+            }
+        }
+
+        html += `<tr style="${rowStyle} border-bottom:1px solid rgba(255,255,255,0.1);">
+            <td style="padding:6px;">${insp.type}</td>
+            <td style="padding:6px;">${insp.begin || '\u2014'}</td>
+            <td style="padding:6px;">${insp.completion || '\u2014'}</td>
+            <td style="padding:6px;">${insp.due || '\u2014'}</td>
+            <td style="padding:6px;">${status}</td>
+        </tr>`;
+    });
+
+    html += '</tbody></table>';
+    return html;
+}
+
+function generateHubDataHTML(bridge) {
+    const bars = bridge.bars_number;
+    const projects = hubData[bars];
+
+    if (!projects || projects.length === 0) {
+        return '<p style="color:#999;">No HUB data for this bridge.</p>';
+    }
+
+    function fmtMoney(val) {
+        if (val === 0 || val === null || val === undefined) return '$0.00';
+        return '$' + Math.abs(val).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + (val < 0 ? ' (CR)' : '');
+    }
+
+    let html = '';
+    projects.forEach((proj, i) => {
+        if (projects.length > 1) {
+            html += `<div style="margin-bottom:8px; padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.15); font-weight:700; color:#22c55e;">Project ${i + 1} of ${projects.length}</div>`;
+        }
+        let familyHtml = 'N/A';
+        if (proj.family_code) {
+            const codes = proj.family_code.split('||').map(c => c.trim()).filter(c => c);
+            familyHtml = codes.map(c => (c.split('-')[0] || c)).join(', ');
+        }
+        html += `
+            <div class="info-grid">
+                <div class="info-item"><span class="info-label">Project</span><span class="info-value">${proj.project || 'N/A'}</span></div>
+                <div class="info-item"><span class="info-label">SPN</span><span class="info-value">${proj.spn || 'N/A'}</span></div>
+                <div class="info-item"><span class="info-label">Federal Project</span><span class="info-value">${proj.federal_project || 'N/A'}</span></div>
+                <div class="info-item"><span class="info-label">Name</span><span class="info-value">${proj.name || 'N/A'}</span></div>
+                <div class="info-item"><span class="info-label">Phase</span><span class="info-value">${proj.phase || 'N/A'}</span></div>
+                <div class="info-item"><span class="info-label">Allocation</span><span class="info-value">${proj.allocation || 'N/A'}</span></div>
+                <div class="info-item"><span class="info-label">District</span><span class="info-value">${proj.district || 'N/A'}</span></div>
+                <div class="info-item"><span class="info-label">Division</span><span class="info-value">${proj.division || 'N/A'}</span></div>
+                <div class="info-item"><span class="info-label">Project Status</span><span class="info-value">${proj.project_status || 'N/A'}</span></div>
+                <div class="info-item"><span class="info-label">Phase Status</span><span class="info-value">${proj.phase_status || 'N/A'}</span></div>
+                <div class="info-item"><span class="info-label">Family Code</span><span class="info-value">${familyHtml}</span></div>
+                <div class="info-item"><span class="info-label">Amount</span><span class="info-value">${fmtMoney(proj.amount)}</span></div>
+                <div class="info-item"><span class="info-label">Expenditure</span><span class="info-value">${fmtMoney(proj.expenditure)}</span></div>
+                <div class="info-item"><span class="info-label">Balance</span><span class="info-value">${fmtMoney(proj.balance)}</span></div>
+                <div class="info-item"><span class="info-label">Start Date</span><span class="info-value">${proj.start_date || 'N/A'}</span></div>
+                <div class="info-item"><span class="info-label">Days to Expiration</span><span class="info-value">${proj.days_expiration || 'N/A'}</span></div>
+                <div class="info-item"><span class="info-label">End Date</span><span class="info-value">${proj.end_date || 'N/A'}</span></div>
+            </div>`;
+        if (i < projects.length - 1) {
+            html += '<div style="margin:12px 0; border-top:2px solid rgba(34,197,94,0.3);"></div>';
+        }
+    });
+    return html;
+}
+
+function renderReportDetail(bridge) {
+    const container = document.getElementById('reportDetail');
+    if (!container || !bridge) return;
+
+    // Title box and bridge list are rendered separately
+    renderReportTitleBox();
+
+    // Section order depends on reportViewMode
+    // Both modes: Condition → Inspections, both expanded
+    // Maintenance: Condition(expanded) → Inspections(expanded) → rest
+    // Inspection:  Condition(expanded) → Inspections(expanded) → rest
+    let sections;
+    sections = [
+        { title: 'Condition', html: generateConditionHTML(bridge), open: true },
+        { title: 'Inspections', html: generateInspectionsHTML(bridge), open: true },
+        { title: 'Geometry & Attributes', html: generateGeometryAttributesHTML(bridge), open: false },
+        { title: 'Narratives', html: generateNarrativesHTML(bridge), open: false }
+    ];
+
+    let html = '';
+    sections.forEach(s => {
+        const arrow = s.open ? '▼' : '▶';
+        const collapsedClass = s.open ? '' : ' collapsed';
+        html += `
+            <div class="report-section">
+                <div class="report-section-header" onclick="toggleReportSection(this)">
+                    <span class="report-arrow">${arrow}</span> ${s.title}
+                </div>
+                <div class="report-section-body${collapsedClass}">
+                    ${s.html}
+                </div>
+            </div>`;
+    });
+
+    container.innerHTML = html;
+}
+
 function restoreFromUrl() {
     const hash = window.location.hash.slice(1);
     if (!hash) return false;
@@ -7845,10 +9922,12 @@ function restoreFromUrl() {
                 const key = 'District ' + d;
                 if (activeDistricts.hasOwnProperty(key)) {
                     activeDistricts[key] = false;
-                    const cb = document.querySelector(`input[data-district="${key}"]`);
-                    if (cb) cb.checked = false;
+                    // Sync drawer item
+                    const item = document.querySelector(`.cr-district-item[data-district="${key}"]`);
+                    if (item) item.classList.add('inactive');
                 }
             });
+            syncToggleAllButton();
         }
 
         // Search
@@ -8043,39 +10122,58 @@ function showUITooltip(el) {
     const tipRect = tip.getBoundingClientRect();
     const vw = window.innerWidth;
     const vh = window.innerHeight;
+    const gap = 10;
+    const pad = 8; // viewport edge padding
 
     let left, top;
+    let placed = false;
 
-    // Default: above the element
-    top = rect.top - tipRect.height - 10;
-    left = rect.left + rect.width / 2 - tipRect.width / 2;
-
-    // If it would go above the viewport, place below
-    if (top < 5) {
-        top = rect.bottom + 10;
-        tip.classList.add('arrow-top');
+    // Explicit position override via data-tip-pos attribute
+    const posHint = el.getAttribute('data-tip-pos');
+    if (posHint === 'right') {
+        left = rect.right + gap;
+        top = rect.top + rect.height / 2 - tipRect.height / 2;
+        tip.classList.add('arrow-left');
+        placed = true;
+    } else if (posHint === 'left') {
+        left = rect.left - tipRect.width - gap;
+        top = rect.top + rect.height / 2 - tipRect.height / 2;
+        tip.classList.add('arrow-right');
+        placed = true;
     }
-
-    // If it would go off the left edge
-    if (left < 5) left = 5;
-    // If it would go off the right edge
-    if (left + tipRect.width > vw - 5) left = vw - tipRect.width - 5;
 
     // For elements on the left edge (folder tabs), position to the right
-    if (rect.left < 80) {
-        left = rect.right + 10;
+    if (!placed && rect.left < 80) {
+        left = rect.right + gap;
         top = rect.top + rect.height / 2 - tipRect.height / 2;
-        tip.classList.remove('arrow-top');
         tip.classList.add('arrow-left');
+        placed = true;
+    }
+    // For elements on the right edge (legend, header, CR buttons), position to the left
+    if (!placed && rect.right > vw - 80) {
+        left = rect.left - tipRect.width - gap;
+        top = rect.top + rect.height / 2 - tipRect.height / 2;
+        tip.classList.add('arrow-right');
+        placed = true;
     }
 
-    // For elements on the right edge (legend, header), position to the left
-    if (rect.right > vw - 80) {
-        left = rect.left - tipRect.width - 10;
-        top = rect.top + rect.height / 2 - tipRect.height / 2;
-        tip.classList.remove('arrow-top');
-        tip.classList.add('arrow-right');
+    if (!placed) {
+        // Default: above the element, centered horizontally
+        left = rect.left + rect.width / 2 - tipRect.width / 2;
+        top = rect.top - tipRect.height - gap;
+
+        if (top < pad) {
+            // Not enough room above — place below with extra gap to clear the cursor
+            top = rect.bottom + gap + 6;
+            tip.classList.add('arrow-top');
+        }
     }
+
+    // Final viewport clamping — keep tooltip fully on screen
+    if (left < pad) left = pad;
+    if (left + tipRect.width > vw - pad) left = vw - tipRect.width - pad;
+    if (top < pad) top = pad;
+    if (top + tipRect.height > vh - pad) top = vh - tipRect.height - pad;
 
     tip.style.left = left + 'px';
     tip.style.top = top + 'px';
