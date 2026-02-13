@@ -45,7 +45,7 @@ let reportCurrentIndex = 0;          // current bridge index in the list
 let reportHighlightMarker = null;    // temp highlight ring on map
 let reportViewMode = 'maintenance';  // 'maintenance' or 'inspection' — controls section order/defaults
 let reportBarsSet = null;            // Set of BARS in current report list (for quick lookup)
-let reportMapMode = 'panZoom';       // 'panZoom' | 'pan' | 'off' — controls map behavior during RE nav
+let reportMapMode = 'pan';           // 'pan' | 'off' — controls map follow during RE nav
 let reportZoomFromNav = false;       // flag to distinguish programmatic zoom from user zoom
 let reTourShownThisSession = false;  // only auto-show RE tutorial once per session
 let reTourActive = false;
@@ -182,7 +182,8 @@ async function init() {
             minZoom: 8,
             maxZoom: 15,
             maxBounds: [[35.5, -84.5], [42.0, -76.0]],
-            maxBoundsViscosity: 0.8
+            maxBoundsViscosity: 0.8,
+            keyboard: false
         });
 
         // Temporary view until we fit to bridge data
@@ -224,11 +225,6 @@ async function init() {
             // Update highlight ring radius to match new point size
             if (reportHighlightMarker) {
                 reportHighlightMarker.setRadius(getHighlightRingRadius());
-            }
-            // If RE is open and zoom wasn't from navigation, switch to pan-only mode
-            if (reportPanelOpen && !reportZoomFromNav && reportMapMode === 'panZoom') {
-                reportMapMode = 'pan';
-                renderReportTitleBox();
             }
             reportZoomFromNav = false;
             // Re-apply condition lock colors after updateBridgeSizes resets them
@@ -307,6 +303,7 @@ function addBridges() {
         marker.bridgeData = bridge;
         
         marker.on('mouseover', function(e) {
+            if (coordDragging) return;
             // Don't show tooltip on hidden bridges
             const options = this.options;
             if (options.opacity === 0 || options.fillOpacity === 0) {
@@ -322,10 +319,12 @@ function addBridges() {
         });
 
         marker.on('mouseout', function() {
+            if (coordDragging) return;
             removeNameTooltip();
         });
         
         marker.on('click', function(e) {
+            if (coordDragging) return;
             // Don't allow clicking hidden bridges
             const options = this.options;
             if (options.opacity === 0 || options.fillOpacity === 0) {
@@ -1622,9 +1621,10 @@ function updateBridgeSizes() {
             shouldShow = false;
         }
 
-        // HIDE BRIDGES WITH N/A (gray color #6b7280) unless N/A is toggled on or search is active
+        // HIDE BRIDGES WITH N/A (gray color #6b7280) unless N/A is toggled on, search is active, or RE has N/A selected
         if (shouldShow && evaluationActive && color.toLowerCase() === '#6b7280') {
-            if (!countCategoryState.na && currentSearchQuery.length === 0) {
+            const reShowsNA = reportPanelOpen && reportCategory === 'na';
+            if (!countCategoryState.na && currentSearchQuery.length === 0 && !reShowsNA) {
                 shouldShow = false;
             }
         }
@@ -1790,12 +1790,74 @@ window.toggleSufficiencyMode = function() {
 
 // Temporary coordinate marker on the map
 let coordMarker = null;
+let coordDragging = false;
+
 
 function removeCoordMarker() {
     if (coordMarker) {
         coordMarker.remove();
         coordMarker = null;
+        coordDragging = false;
     }
+}
+
+// Find the nearest bridge to a lat/lng, returns { bridge, dist } or null
+function findNearestBridge(lat, lng) {
+    let nearest = null;
+    let bestDist = Infinity;
+    Object.values(bridgeLayers).forEach(marker => {
+        const b = marker.bridgeData;
+        if (!b || !b.latitude || !b.longitude) return;
+        const dlat = parseFloat(b.latitude) - lat;
+        const dlng = parseFloat(b.longitude) - lng;
+        const d = dlat * dlat + dlng * dlng;
+        if (d < bestDist) { bestDist = d; nearest = b; }
+    });
+    return nearest ? { bridge: nearest, dist: Math.sqrt(bestDist) } : null;
+}
+
+// Create a draggable coordinate marker that snaps to nearest bridge
+function createCoordMarker(lat, lng) {
+    removeCoordMarker();
+
+    // Custom black circle icon using DivIcon
+    const icon = L.divIcon({
+        className: 'coord-marker-icon',
+        iconSize: [18, 18],
+        iconAnchor: [9, 9]
+    });
+
+    coordMarker = L.marker([lat, lng], {
+        icon: icon,
+        draggable: true,
+        zIndexOffset: 10000
+    }).addTo(map);
+
+    coordMarker.bindTooltip(lat.toFixed(5) + ', ' + lng.toFixed(5), {
+        permanent: true, direction: 'top', offset: [0, -12],
+        className: 'coord-tooltip'
+    }).openTooltip();
+
+    // Suppress bridge marker events while dragging
+    coordMarker.on('dragstart', function() { coordDragging = true; });
+    coordMarker.on('dragend', function() { coordDragging = false; });
+
+    // On drag — snap to nearest bridge in real time, update tooltip
+    coordMarker.on('drag', function(e) {
+        const pos = e.target.getLatLng();
+        const result = findNearestBridge(pos.lat, pos.lng);
+        // Snap threshold based on zoom: tighter when zoomed in
+        const snapThreshold = 0.5 / Math.pow(2, map.getZoom() - 7);
+        if (result && result.dist < snapThreshold) {
+            const bLat = parseFloat(result.bridge.latitude);
+            const bLng = parseFloat(result.bridge.longitude);
+            coordMarker.setLatLng([bLat, bLng]);
+            const name = result.bridge.bridge_name || result.bridge.bars_number || '';
+            coordMarker.setTooltipContent(bLat.toFixed(5) + ', ' + bLng.toFixed(5) + '\n' + name);
+        } else {
+            coordMarker.setTooltipContent(pos.lat.toFixed(5) + ', ' + pos.lng.toFixed(5));
+        }
+    });
 }
 
 // Try to parse a coordinate pair from a string. Very forgiving with formatting.
@@ -1810,10 +1872,11 @@ function parseCoordinates(str) {
     const a = parseFloat(parts[0]);
     const b = parseFloat(parts[1]);
     if (isNaN(a) || isNaN(b)) return null;
-    // Sanity check: WV is roughly lat 37-40, lng -78 to -83
-    // Be generous — accept any plausible lat/lng
-    if (Math.abs(a) > 90 || Math.abs(b) > 180) return null;
-    // If both look like they could be lat/lng, use first as lat, second as lng
+    // Only accept coordinates within West Virginia bounds (with some padding)
+    // WV: lat ~37.2–40.65, lng ~-82.65–-77.7
+    const WV_LAT_MIN = 37.1, WV_LAT_MAX = 40.75;
+    const WV_LNG_MIN = -82.75, WV_LNG_MAX = -77.6;
+    if (a < WV_LAT_MIN || a > WV_LAT_MAX || b < WV_LNG_MIN || b > WV_LNG_MAX) return null;
     return { lat: a, lng: b };
 }
 
@@ -1825,19 +1888,11 @@ function setupSearch() {
         const coords = parseCoordinates(rawValue);
 
         if (coords) {
-            // Coordinate search — pan to location and drop marker
+            // Coordinate search — pan to location and drop draggable marker
             currentSearchQuery = '';
             applySearch();
-            removeCoordMarker();
             map.panTo([coords.lat, coords.lng]);
-            coordMarker = L.circleMarker([coords.lat, coords.lng], {
-                radius: 8, color: '#FFB81C', weight: 3,
-                fillColor: '#FFB81C', fillOpacity: 0.4
-            }).addTo(map);
-            coordMarker.bindTooltip(coords.lat.toFixed(5) + ', ' + coords.lng.toFixed(5), {
-                permanent: true, direction: 'top', offset: [0, -10],
-                className: 'coord-tooltip'
-            }).openTooltip();
+            createCoordMarker(coords.lat, coords.lng);
             return;
         }
 
@@ -2614,7 +2669,7 @@ document.addEventListener('keydown', function(e) {
     } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault();
         // Cycle through categories
-        const catOrder = ['critical', 'emergent', 'satisfactory', 'na', 'hubdata', 'total'];
+        const catOrder = ['critical', 'emergent', 'satisfactory', 'na', 'total'];
         let idx = catOrder.indexOf(reportCategory);
         if (e.key === 'ArrowRight') {
             idx = (idx + 1) % catOrder.length;
@@ -5562,8 +5617,8 @@ function applyBothCategoryFilter() {
             if (bothActiveSection === 'insp') {
                 // Inspection theme: gradient HSL colors from getInspectionColor
                 color = getInspectionColor(bridge);
-                // Skip N/A grey bridges
-                if (color === '#888') {
+                // Skip N/A grey bridges (unless N/A is the selected category)
+                if (color === '#888' && bothActiveCategory !== 'na') {
                     if (marker._map) marker.remove();
                     return;
                 }
@@ -5574,8 +5629,8 @@ function applyBothCategoryFilter() {
             } else {
                 // Maintenance theme: condition colors (respects sliders when active)
                 color = evaluationActive ? getEvaluationColor(bridge) : getWorstConditionColor(bridge);
-                // Skip grey (N/A) bridges in maintenance isolation
-                if (color === '#6b7280') {
+                // Skip grey (N/A) bridges in maintenance isolation (unless N/A is the selected category)
+                if (color === '#6b7280' && bothActiveCategory !== 'na') {
                     if (marker._map) marker.remove();
                     return;
                 }
@@ -6165,7 +6220,6 @@ const tourSteps = [
             map.doubleClickZoom.disable();
             map.touchZoom.disable();
             map.boxZoom.disable();
-            map.keyboard.disable();
         },
         onExit: function() {
             // Restore map z-index and re-enable interactions
@@ -6175,7 +6229,7 @@ const tourSteps = [
             map.doubleClickZoom.enable();
             map.touchZoom.enable();
             map.boxZoom.enable();
-            map.keyboard.enable();
+
             closeAllMenus();
             map.fitBounds(wvBounds, { padding: [30, 30] });
         }
@@ -6266,7 +6320,7 @@ const tourSteps = [
             map.scrollWheelZoom.enable();
             map.doubleClickZoom.enable();
             map.touchZoom.enable();
-            map.keyboard.enable();
+
             map.boxZoom.disable();
 
             // Draw one big red circle around the non-interstate outlier cluster
@@ -6667,7 +6721,6 @@ function restoreTourState() {
     map.doubleClickZoom.enable();
     map.touchZoom.enable();
     map.boxZoom.enable();
-    map.keyboard.enable();
 
     // Reset HUB button z-index and hide it (only shown during tour)
     const hubToggle = document.getElementById('projectToggle');
@@ -8358,6 +8411,7 @@ function toggleReportsPanel() {
         panel.classList.remove('open', 'ontop');
         reportPanelOpen = false;
         removeReportHighlight();
+
         reportBarsSet = null;
         // Clear condition rating filters
         reportConditionFilters = {};
@@ -8375,8 +8429,8 @@ function toggleReportsPanel() {
         } else {
             reportViewMode = 'maintenance';
         }
-        // Reset map mode to Pan+Zoom on fresh open
-        reportMapMode = 'panZoom';
+        // Reset map follow on fresh open
+        reportMapMode = 'pan';
         // Build mode bar, category buttons + load default category
         renderReportModeBar();
         buildReportCategoryButtons();
@@ -8457,15 +8511,13 @@ function buildReportCategoryButtons() {
         { key: 'critical',      label: 'Critical',      color: '#dc2626' },
         { key: 'emergent',      label: 'Emergent',      color: '#F97316' },
         { key: 'satisfactory',  label: 'Satisfactory',  color: '#10B981' },
-        { key: 'na',            label: 'N/A',           color: '#6b7280' },
-        { key: 'hubdata',       label: 'HUB',           color: '#22c55e' }
+        { key: 'na',            label: 'N/A',           color: '#6b7280' }
     ] : [
         { key: 'total',         label: 'Total',         color: '#FFB81C' },
         { key: 'critical',      label: 'Past Due',      color: '#dc2626' },
         { key: 'emergent',      label: 'Upcoming',      color: '#F97316' },
         { key: 'satisfactory',  label: 'Completed',     color: '#10B981' },
-        { key: 'na',            label: 'N/A',           color: '#6b7280' },
-        { key: 'hubdata',       label: 'HUB',           color: '#22c55e' }
+        { key: 'na',            label: 'N/A',           color: '#6b7280' }
     ];
 
     bar.innerHTML = categories.map(c => {
@@ -8482,7 +8534,7 @@ function buildReportCategoryButtons() {
 function updateReportCategoryButtonStates() {
     document.querySelectorAll('.report-cat-btn').forEach(btn => {
         const cat = btn.getAttribute('data-cat');
-        const colors = { total:'#FFB81C', critical:'#dc2626', emergent:'#F97316', satisfactory:'#10B981', na:'#6b7280', hubdata:'#22c55e' };
+        const colors = { total:'#FFB81C', critical:'#dc2626', emergent:'#F97316', satisfactory:'#10B981', na:'#6b7280' };
         const c = colors[cat] || '#FFB81C';
         const active = reportCategory === cat;
         btn.style.color = '#fff';
@@ -8682,9 +8734,8 @@ function renderReportTitleBox() {
     const bridge = reportBridgeList[reportCurrentIndex];
     const bridgeName = cleanBridgeName(bridge.bridge_name || 'Unknown');
     const titleCase = bridgeName.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-    const modeIcons = { panZoom: 'Pan+Zoom', pan: 'Pan', off: 'Off' };
-    const modeLabel = modeIcons[reportMapMode];
-    const modeTip = 'Click to cycle: Pan+Zoom → Pan → Off';
+    const modeLabel = reportMapMode === 'off' ? 'Enable Map Follow' : 'Disable Map Follow';
+    const modeTip = reportMapMode === 'off' ? 'Map will fly to each bridge as you navigate' : 'Map will stay put as you navigate';
 
     box.innerHTML = `
         <div style="margin-bottom:8px; padding:8px; background:rgba(0,59,92,0.5); border:1px solid rgba(255,184,28,0.3); border-radius:6px; text-align:center; display:flex; align-items:center; justify-content:space-between; gap:6px;">
@@ -8706,9 +8757,7 @@ function renderReportTitleBox() {
 }
 
 window.cycleReportMapMode = function() {
-    const modes = ['panZoom', 'pan', 'off'];
-    const idx = modes.indexOf(reportMapMode);
-    reportMapMode = modes[(idx + 1) % modes.length];
+    reportMapMode = reportMapMode === 'off' ? 'pan' : 'off';
     renderReportTitleBox();
 };
 
@@ -8809,8 +8858,8 @@ function renderReportBridgeList() {
 
     // Build status-aware section header
     const catLabels = isMaint
-        ? { total: 'All', critical: 'Critical', emergent: 'Emergent', satisfactory: 'Satisfactory', na: 'N/A', hubdata: 'HUB' }
-        : { total: 'All', critical: 'Past Due', emergent: 'Upcoming', satisfactory: 'Completed', na: 'N/A', hubdata: 'HUB' };
+        ? { total: 'All', critical: 'Critical', emergent: 'Emergent', satisfactory: 'Satisfactory', na: 'N/A' }
+        : { total: 'All', critical: 'Past Due', emergent: 'Upcoming', satisfactory: 'Completed', na: 'N/A' };
     const catLabel = catLabels[reportCategory] || reportCategory;
     const listType = isMaint ? 'Bridge List' : 'Inspection List';
     const listTitle = `${catLabel} ${listType} (${reportBridgeList.length})`;
@@ -8841,6 +8890,7 @@ function reportPrevBridge() {
     updateReportNav();
     renderReportBridgeList();
     applyReportCategoryFilter();
+
 }
 
 function reportNextBridge() {
@@ -8851,6 +8901,7 @@ function reportNextBridge() {
     updateReportNav();
     renderReportBridgeList();
     applyReportCategoryFilter();
+
 }
 
 window.reportGoToBridge = function(idx) {
@@ -8873,6 +8924,7 @@ window.reportGoToBridge = function(idx) {
     updateReportNav();
     renderReportBridgeList();
     applyReportCategoryFilter();
+
 };
 
 // Calculate highlight ring radius: point size + gap so there's always space between point and ring
@@ -8881,18 +8933,55 @@ function getHighlightRingRadius() {
     return pointSize + 6; // 6px gap between point edge and ring
 }
 
+// Returns the pixel rectangle of the map area not covered by UI panels
+function getMapClearZone() {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const pad = 30; // extra margin so the point isn't right at a panel edge
+    // Left: RE panel when open
+    const rePanel = document.getElementById('reportsPanel');
+    const left = (rePanel && rePanel.classList.contains('open')) ? 384 + pad : pad;
+    // Top: small margin
+    const top = pad;
+    // Bottom: status bar (40px) + gap
+    const bottom = h - 50 - pad;
+    // Right: header and CR boxes sit on the right side
+    const header = document.querySelector('.header');
+    const cr = document.getElementById('countReport');
+    const headerLeft = header ? header.getBoundingClientRect().left : w;
+    const crLeft = cr ? cr.getBoundingClientRect().left : w;
+    const right = Math.min(headerLeft, crLeft) - pad;
+    return { left, top, right, bottom };
+}
+
 function highlightReportBridge(bridge) {
     removeReportHighlight();
     if (!bridge || !bridge.latitude || !bridge.longitude) return;
     const latlng = [parseFloat(bridge.latitude), parseFloat(bridge.longitude)];
-    // Only move the map if the bridge is NOT already in the current view
-    const inView = map.getBounds().contains(latlng);
-    if (!inView) {
-        if (reportMapMode === 'panZoom') {
+    if (reportMapMode !== 'off') {
+        // Check if the point is in the clear (unobstructed) area of the viewport
+        const clearZone = getMapClearZone();
+        const inBounds = map.getBounds().contains(latlng);
+        let inClear = false;
+        if (inBounds) {
+            const pt = map.latLngToContainerPoint(latlng);
+            inClear = pt.x > clearZone.left && pt.x < clearZone.right &&
+                      pt.y > clearZone.top && pt.y < clearZone.bottom;
+        }
+        if (!inClear) {
+            const targetZoom = Math.min(map.getZoom(), 10);
+            // Offset so the bridge lands at the center of the clear zone, not the map center
+            const clearCX = (clearZone.left + clearZone.right) / 2;
+            const clearCY = (clearZone.top + clearZone.bottom) / 2;
+            const mapCX = window.innerWidth / 2;
+            const mapCY = window.innerHeight / 2;
+            const bridgePixel = map.project(latlng, targetZoom);
+            const adjusted = map.unproject(
+                [bridgePixel.x + (mapCX - clearCX), bridgePixel.y + (mapCY - clearCY)],
+                targetZoom
+            );
             reportZoomFromNav = true;
-            map.setView(latlng, 12);
-        } else if (reportMapMode === 'pan') {
-            map.panTo(latlng);
+            map.flyTo(adjusted, targetZoom, { duration: 0.6 });
         }
     }
     // Always place the highlight ring
@@ -8928,7 +9017,7 @@ function removeReportHighlight() {
 // Sync CR buttons to match RE category selection
 function syncCRWithReCategory(category) {
     const section = reportViewMode === 'inspection' ? 'insp' : 'maint';
-    if (category === 'total' || category === 'hubdata') {
+    if (category === 'total') {
         // Clear CR isolation
         if (bothActiveSection || bothActiveCategory) {
             bothActiveSection = null;
@@ -8963,21 +9052,30 @@ function applyReportCategoryFilter() {
 
         if (hasCondLocks) {
             // Condition locks active — show ALL points in maintenance colors
+            if (!marker._map) marker.addTo(map);
             const color = getWorstConditionColor(bridge);
             marker.setStyle({ fillColor: color });
             if (reportBarsSet.has(bars)) {
-                // Matches locks — full prominence
                 marker.setStyle({ fillOpacity: 1, opacity: 1 });
             } else {
-                // Doesn't match — dimmed but visible
                 marker.setStyle({ fillOpacity: 0.12, opacity: 0.4 });
             }
         } else if (reportBarsSet.has(bars)) {
-            // In list — full opacity, correct color
-            marker.setStyle({ fillOpacity: 1, opacity: 1 });
+            // In list — ensure on map with full opacity and correct color
+            if (!marker._map) marker.addTo(map);
+            const isInsp = reportViewMode === 'inspection';
+            let fillColor;
+            if (reportCategory === 'na') {
+                fillColor = '#6b7280';
+            } else if (isInsp) {
+                fillColor = getInspectionColor(bridge);
+            } else {
+                fillColor = evaluationActive ? getEvaluationColor(bridge) : getWorstConditionColor(bridge);
+            }
+            marker.setStyle({ fillColor: fillColor, fillOpacity: 1, opacity: 1 });
         } else {
-            // Not in list — hidden (category is fully engaged)
-            marker.setStyle({ fillOpacity: 0, opacity: 0 });
+            // Not in list — hide
+            if (marker._map) marker.setStyle({ fillOpacity: 0, opacity: 0 });
         }
     });
 }
@@ -9025,8 +9123,8 @@ function updateReStatusBar() {
     bar.style.background = 'rgba(139, 0, 0, 0.95)';
     const modeLabel = isMaint ? 'Maintenance Mode' : 'Inspection Mode';
     const catLabels = isMaint
-        ? { total: 'All Bridges', critical: 'Critical', emergent: 'Emergent', satisfactory: 'Satisfactory', na: 'N/A', hubdata: 'HUB Data' }
-        : { total: 'All Bridges', critical: 'Past Due', emergent: 'Upcoming', satisfactory: 'Completed', na: 'N/A', hubdata: 'HUB Data' };
+        ? { total: 'All Bridges', critical: 'Critical', emergent: 'Emergent', satisfactory: 'Satisfactory', na: 'N/A' }
+        : { total: 'All Bridges', critical: 'Past Due', emergent: 'Upcoming', satisfactory: 'Completed', na: 'N/A' };
     const catLabel = catLabels[reportCategory] || reportCategory;
     const listType = isMaint ? 'Bridge List' : 'Inspection List';
     const textEl = document.getElementById('re-status-text');
@@ -9061,6 +9159,17 @@ function closeReportExplorerIfOpen() {
     reportPanelOpen = false;
     removeReportHighlight();
     reportBarsSet = null;
+    // Clear condition locks
+    reportConditionFilters = {};
+    reportSufficiencyFilter = null;
+    // Clear CR category sync so isolation doesn't carry over
+    if (bothActiveSection || bothActiveCategory) {
+        bothActiveSection = null;
+        bothActiveCategory = null;
+        applyBothCategoryFilter();
+        updateBothButtonStyles();
+        updateButtonStyles();
+    }
     updateBridgeVisibility();
     updateReStatusBar();
 }
@@ -9090,7 +9199,7 @@ const reTourSteps = [
     {
         target: '#reportTitleBox',
         title: 'Bridge Navigation',
-        text: 'The title box shows the current bridge name with navigation arrows.\n\n\u2022 \u25B2 \u25BC arrows — Move to previous/next bridge\n\u2022 Up/Down arrow keys — Same as clicking arrows\n\u2022 Google Maps link — Open bridge location in Google Maps\n\u2022 AssetWise link — Open bridge record in AssetWise\n\u2022 Pan+Zoom toggle — Control map behavior during navigation\n\nLook for the black ring on the map highlighting the current bridge. Try pressing Up or Down to move through the list.',
+        text: 'The title box shows the current bridge name with navigation arrows.\n\n\u2022 \u25B2 \u25BC arrows — Move to previous/next bridge\n\u2022 Up/Down arrow keys — Same as clicking arrows\n\u2022 Google Maps link — Open bridge location in Google Maps\n\u2022 AssetWise link — Open bridge record in AssetWise\n\u2022 Map Follow toggle — Enable/disable map flying to each bridge\n\nLook for the black ring on the map highlighting the current bridge. Try pressing Up or Down to move through the list.',
         position: 'bottom',
         allowUpDown: true,
         onEnter: function() {
@@ -9249,7 +9358,7 @@ const reTourSteps = [
             window._reTourCharlestonXY = { cx: cx, cy: cy };
 
             // Animate CR buttons cycling through states (including HUB Data)
-            const cats = ['critical', 'emergent', 'satisfactory', 'hubdata'];
+            const cats = ['critical', 'emergent', 'satisfactory'];
             let animStep = 0;
             window._reTourCRAnimation = setInterval(function() {
                 const cat = cats[animStep % cats.length];

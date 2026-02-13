@@ -512,6 +512,20 @@
             margin-right: 8px; border: 1px solid #fff;
         }
         
+        /* Coordinate marker — black draggable dot with yellow ring */
+        .coord-marker-icon {
+            width: 18px !important;
+            height: 18px !important;
+            background: #000;
+            border: 2px solid var(--wvdoh-yellow);
+            border-radius: 50%;
+            box-shadow: 0 0 8px rgba(255,184,28,0.5);
+            cursor: move;
+        }
+        .coord-marker-icon:hover { cursor: grab; box-shadow: 0 0 12px rgba(255,184,28,0.8); }
+        .coord-marker-icon:active { cursor: grabbing; }
+
+
         /* Coordinate search tooltip */
         .coord-tooltip {
             background: rgba(0,59,92,0.9) !important;
@@ -563,8 +577,10 @@
             border-radius: 6px 0 0 6px;
             cursor: pointer;
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
+            position: relative;
             box-shadow: -2px 0 8px rgba(0, 0, 0, 0.3);
             transition: all 0.2s;
             flex-shrink: 0;
@@ -1330,13 +1346,13 @@
         <div class="subtitle">Operations Division – 0066</div>
         <div class="email"><a href="mailto:jason.d.bryan@wv.gov">jason.d.bryan@wv.gov</a></div>
         <div class="search" data-tip="Search bridges by name, BARS number, route, county, or district. Paste coordinates (lat, lng) to jump to a location.">
-            <input type="text" id="searchInput" placeholder="Search or paste coordinates...">
+            <input type="text" id="searchInput" placeholder="BARS, Name, Coordinates">
         </div>
         <div style="display: flex; justify-content: flex-end; align-items: center; margin-top: 4px; margin-bottom: -12px; margin-right: -20px;">
             <div id="version-label" style="color: #fff; font-size: 9pt; font-style: italic; cursor: default;" data-tip="You're a nosey one, ain't ya?">δ3</div>
         </div>
     </div>
-    
+
     <div id="map"></div>
     <div id="map-watermark" style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:500px; height:500px; pointer-events:none; z-index:399; opacity:0.04;">
         <img src="wvdot-logo.png" alt="" style="width:100%; height:100%; object-fit:contain;">
@@ -1748,6 +1764,7 @@
         <div class="cr-district-slideout" id="crDistrictSlideout">
             <!-- Tab on left — visible when closed, slides further left when open -->
             <div class="cr-district-tab" id="crDistrictTab" onclick="toggleCrDistricts()" data-tip="Click to open the District Filter — solo a district by clicking it, click again to show all.">
+                <div style="position:absolute; top:6px; color:var(--wvdoh-yellow); font-size:7pt;">&#9664;</div>
                 <div class="cr-district-tab-text">District Filter</div>
             </div>
             <!-- Content on right — hidden behind CR when closed, visible when open -->
