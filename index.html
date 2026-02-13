@@ -512,6 +512,19 @@
             margin-right: 8px; border: 1px solid #fff;
         }
         
+        /* Coordinate search tooltip */
+        .coord-tooltip {
+            background: rgba(0,59,92,0.9) !important;
+            border: 1px solid var(--wvdoh-yellow) !important;
+            color: #fff !important;
+            font-size: 9pt !important;
+            font-weight: 600 !important;
+            padding: 3px 8px !important;
+            border-radius: 4px !important;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
+        }
+        .coord-tooltip::before { border-top-color: var(--wvdoh-yellow) !important; }
+
         /* Count Report Box — fixed bottom-right */
         .count-report {
             position: fixed;
@@ -1316,8 +1329,8 @@
         <h1>SpanBase</h1>
         <div class="subtitle">Operations Division – 0066</div>
         <div class="email"><a href="mailto:jason.d.bryan@wv.gov">jason.d.bryan@wv.gov</a></div>
-        <div class="search" data-tip="Search bridges by name, BARS number, route, county, or district. Results filter the map in real time.">
-            <input type="text" id="searchInput" placeholder="Search...">
+        <div class="search" data-tip="Search bridges by name, BARS number, route, county, or district. Paste coordinates (lat, lng) to jump to a location.">
+            <input type="text" id="searchInput" placeholder="Search or paste coordinates...">
         </div>
         <div style="display: flex; justify-content: flex-end; align-items: center; margin-top: 4px; margin-bottom: -12px; margin-right: -20px;">
             <div id="version-label" style="color: #fff; font-size: 9pt; font-style: italic; cursor: default;" data-tip="You're a nosey one, ain't ya?">δ3</div>

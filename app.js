@@ -1788,11 +1788,62 @@ window.toggleSufficiencyMode = function() {
     updateBridgeSizes();
 };
 
+// Temporary coordinate marker on the map
+let coordMarker = null;
+
+function removeCoordMarker() {
+    if (coordMarker) {
+        coordMarker.remove();
+        coordMarker = null;
+    }
+}
+
+// Try to parse a coordinate pair from a string. Very forgiving with formatting.
+// Returns { lat, lng } or null if not coordinates.
+function parseCoordinates(str) {
+    // Strip parentheses, brackets, leading/trailing whitespace
+    let s = str.replace(/[()[\]{}]/g, '').trim();
+    // Collapse multiple spaces/commas into a single separator
+    s = s.replace(/[\s,]+/g, ' ').trim();
+    const parts = s.split(' ');
+    if (parts.length !== 2) return null;
+    const a = parseFloat(parts[0]);
+    const b = parseFloat(parts[1]);
+    if (isNaN(a) || isNaN(b)) return null;
+    // Sanity check: WV is roughly lat 37-40, lng -78 to -83
+    // Be generous — accept any plausible lat/lng
+    if (Math.abs(a) > 90 || Math.abs(b) > 180) return null;
+    // If both look like they could be lat/lng, use first as lat, second as lng
+    return { lat: a, lng: b };
+}
+
 function setupSearch() {
     const searchInput = document.getElementById('searchInput');
-    
+
     searchInput.addEventListener('input', (e) => {
-        const originalValue = e.target.value.toUpperCase();
+        const rawValue = e.target.value;
+        const coords = parseCoordinates(rawValue);
+
+        if (coords) {
+            // Coordinate search — pan to location and drop marker
+            currentSearchQuery = '';
+            applySearch();
+            removeCoordMarker();
+            map.panTo([coords.lat, coords.lng]);
+            coordMarker = L.circleMarker([coords.lat, coords.lng], {
+                radius: 8, color: '#FFB81C', weight: 3,
+                fillColor: '#FFB81C', fillOpacity: 0.4
+            }).addTo(map);
+            coordMarker.bindTooltip(coords.lat.toFixed(5) + ', ' + coords.lng.toFixed(5), {
+                permanent: true, direction: 'top', offset: [0, -10],
+                className: 'coord-tooltip'
+            }).openTooltip();
+            return;
+        }
+
+        // Normal bridge search
+        removeCoordMarker();
+        const originalValue = rawValue.toUpperCase();
         currentSearchQuery = originalValue.trim();
         applySearch();
 
@@ -1802,13 +1853,14 @@ function setupSearch() {
         }
         updateUrlHash();
     });
-    
+
     // ESC key clears search (tab resets handled by the global ESC handler)
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             // Clear search
             searchInput.value = '';
             currentSearchQuery = '';
+            removeCoordMarker();
             applySearch();
             updateBridgeSizes();
         }
