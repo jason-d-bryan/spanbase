@@ -4318,6 +4318,18 @@ function getBridgeCategory(bridge) {
     return 'satisfactory';
 }
 
+// Base categorization for RE — always uses all 5 components, ignores CF slider state
+function getBaseBridgeCategory(bridge) {
+    const ratings = [bridge.deck_rating, bridge.superstructure_rating,
+        bridge.substructure_rating, bridge.bearings_rating, bridge.joints_rating]
+        .filter(r => typeof r === 'number' && !isNaN(r) && r >= 1 && r <= 9);
+    if (ratings.length === 0) return 'na';
+    const worst = Math.min(...ratings);
+    if (worst <= 1) return 'critical';
+    if (worst <= 4) return 'emergent';
+    return 'satisfactory';
+}
+
 // Categorize a bridge by condition ratings only (maintenance section)
 function getMaintenanceCategoryForBridge(bridge) {
     const ratingMap = {
@@ -8605,16 +8617,8 @@ function buildReportBridgeList(category) {
         // Box exclusion
         if (boxExcludedBars.has(bars)) return;
 
-        // Sufficiency filter
-        if (typeof sliderValues !== 'undefined' && sliderValues.sufficiency !== undefined && sliderValues.sufficiency > 0) {
-            const suf = sufficiencyData[bars];
-            if (suf !== undefined) {
-                if (sufficiencyMode === 'lte' && suf >= sliderValues.sufficiency) return;
-                if (sufficiencyMode === 'gte' && suf <= sliderValues.sufficiency) return;
-            }
-        }
-
         // Category filter — use inspection or maintenance categories based on view mode
+        // RE uses base categorization (all 5 components) independent of CF slider state
         if (category === 'total') {
             // Include all that pass filters
         } else if (category === 'hubdata') {
@@ -8622,7 +8626,7 @@ function buildReportBridgeList(category) {
         } else if (reportViewMode === 'inspection') {
             if (getInspectionCategoryForBridge(bridge) !== category) return;
         } else {
-            if (getBridgeCategory(bridge) !== category) return;
+            if (getBaseBridgeCategory(bridge) !== category) return;
         }
 
         // Condition lock filters (only in maintenance mode)
@@ -9163,14 +9167,13 @@ function closeReportExplorerIfOpen() {
     reportConditionFilters = {};
     reportSufficiencyFilter = null;
     // Clear CR category sync so isolation doesn't carry over
-    if (bothActiveSection || bothActiveCategory) {
-        bothActiveSection = null;
-        bothActiveCategory = null;
-        applyBothCategoryFilter();
-        updateBothButtonStyles();
-        updateButtonStyles();
-    }
-    updateBridgeVisibility();
+    bothActiveSection = null;
+    bothActiveCategory = null;
+    // Full restore — updateBridgeSizes handles colors, sizes, z-order, filters, and CR sync
+    updateBridgeSizes();
+    updateBothButtonStyles();
+    updateButtonStyles();
+    updateCountReport();
     updateReStatusBar();
 }
 
